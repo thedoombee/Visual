@@ -1,4 +1,4 @@
-# MCD Studio
+# Visual
 
 > Collez un schema **Prisma**, **Drizzle** ou **SQL**, obtenez un beau diagramme
 > de base de données (type MCD), modifiez-le à la souris, puis exportez-le
