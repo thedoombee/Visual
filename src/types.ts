@@ -22,13 +22,45 @@ export interface DBRelation {
   fromField: string;
   toTable: string;
   toField: string;
-  cardinality?: string; // e.g. "1:N", "1:1", "N:N"
+  // Cardinalités MCD (Merise) : une de chaque côté du lien.
+  // Ex : Commande(1,N) — (0,1)Client. Ancien champ `cardinality` migré auto.
+  fromCard?: string;
+  toCard?: string;
+  cardinality?: string; // legacy ("N:1"…), converti à la volée
+}
+
+// Cardinalités MCD standard : min,max de chaque côté.
+export const MCD_CARDS = ["0,1", "1,1", "0,N", "1,N"] as const;
+
+// Convertit une vieille cardinalité unique en couple MCD (côté from, côté to).
+export function mcdCards(r: Pick<DBRelation, "fromCard" | "toCard" | "cardinality">): { a: string; b: string } {
+  if (r.fromCard || r.toCard) return { a: r.fromCard ?? "1,N", b: r.toCard ?? "1,1" };
+  switch (r.cardinality) {
+    case "1:N": return { a: "1,1", b: "1,N" };
+    case "1:1": return { a: "1,1", b: "1,1" };
+    case "N:N": return { a: "1,N", b: "1,N" };
+    default: return { a: "1,N", b: "1,1" }; // "N:1" : N côté FK, 1 côté PK
+  }
+}
+
+// Lot = regroupement nommé de tables créé par l'utilisateur.
+// Permet de faire cohabiter plusieurs modèles importés sur la même grille :
+// visibilité par lot, export par lot, assignation table ↔ lot (1 lot max par table).
+export interface DBLot {
+  id: string;
+  name: string;
+  color: string;
+  tableIds: string[];
+  hidden?: boolean;
 }
 
 export interface DBModel {
   tables: DBTable[];
   relations: DBRelation[];
+  lots?: DBLot[];
 }
+
+export const LOT_COLORS = ["#FF2B1D", "#111111", "#0A6CFF", "#0E9F6E", "#B7791F", "#7C3AED"];
 
 export const uid = (p = "id") =>
   `${p}_${Math.random().toString(36).slice(2, 8)}`;

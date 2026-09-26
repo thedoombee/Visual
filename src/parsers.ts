@@ -83,7 +83,7 @@ export function parsePrisma(input: string): DBModel {
               fromField: toSnake(ff),
               toTable: toSnake(ftype),
               toField: toSnake(toFields[idx] ?? toFields[0]),
-              cardinality: "N:1",
+              fromCard: "1,N", toCard: "1,1",
             });
           });
         }
@@ -126,7 +126,7 @@ export function parsePrisma(input: string): DBModel {
           fromField: f.name,
           toTable: cand,
           toField,
-          cardinality: "N:1",
+          fromCard: "1,N", toCard: "1,1",
         });
         f.fk = true;
       }
@@ -235,7 +235,7 @@ export function parseDrizzle(input: string): DBModel {
           fromField: colName,
           toTable,
           toField: toSnake(refColVar),
-          cardinality: "N:1",
+          fromCard: "1,N", toCard: "1,1",
         });
       }
     }
@@ -318,7 +318,7 @@ export function parseSQL(input: string): DBModel {
             fromField: fc,
             toTable,
             toField: toCols[idx] ?? toCols[0],
-            cardinality: "N:1",
+            fromCard: "1,N", toCard: "1,1",
           });
           const f = fields.find((x) => x.name === fc);
           if (f) f.fk = true;
@@ -338,7 +338,7 @@ export function parseSQL(input: string): DBModel {
             fromField: fc,
             toTable: fm![1],
             toField: fm![2].split(",").map(cleanId)[idx] ?? "id",
-            cardinality: "N:1",
+            fromCard: "1,N", toCard: "1,1",
           });
         });
         continue;
@@ -375,7 +375,7 @@ export function parseSQL(input: string): DBModel {
           fromField: cleanId(cname),
           toTable: refInline[1],
           toField: cleanId(refInline[2].split(",")[0]),
-          cardinality: "N:1",
+          fromCard: "1,N", toCard: "1,1",
         });
       }
     }
