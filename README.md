@@ -42,8 +42,8 @@ mono condensé).
 | Catégorie | Détails |
 |---|---|
 | **Modèles importés (illimités)** | Panneau gauche = liste de modèles. Chacun a son nom, son texte, son badge auto (`PRISMA` / `DRIZZLE` / `SQL`), se **plie / déplie** au clic, accepte les exemples et les fichiers (`.sql`, `.prisma`, `.ts`, `.txt` — le nom du fichier renomme le modèle). Liste persistée en local. |
-| **Fusion multi-modèles** | Chaque modèle propose **＋ Fusionner** (ajoute ses tables à droite du canvas sans effacer les autres, renommage auto `users → users_2`, lot créé à son nom) ou **Remplacer** (reset du canvas avec ce modèle). |
-| **Lots utilisateur** | Regroupements nommés et colorés (1 table = 1 lot max). Création manuelle, depuis les résultats de recherche, ou auto à chaque fusion. Chaque lot : renommage en ligne, compteur, **œil pour masquer/afficher** tout le lot (les liens suivent), chips des tables (clic = centrer), ajout de la table sélectionnée, **export SQL / Prisma / Drizzle du lot seul**, dissolution ou suppression lot + tables. |
+| **Ajout multi-modèles** | Chaque modèle propose **＋ Ajouter** (ajoute ses tables à droite du canvas sans effacer les autres, renommage auto `users → users_2`, lot créé à son nom) ou **Remplacer** (reset du canvas avec ce modèle). |
+| **Lots utilisateur** | Regroupements nommés et colorés (1 table = 1 lot max). Création manuelle, depuis les résultats de recherche, ou auto à chaque ajout. Chaque lot : renommage en ligne, compteur, **œil pour masquer/afficher** tout le lot (les liens suivent), chips des tables (clic = centrer), ajout de la table sélectionnée, **export SQL / Prisma / Drizzle du lot seul**, dissolution ou suppression lot + tables. |
 | **Liaisons entité → entité** | Deux façons : formulaire **« Relier 2 entités »** (entité source → entité cible, champs pré-remplis : le `xxx_id` qui vise la cible + la PK en face) ou **mode 🔗 Relier sur le canvas** (clic source → clic cible, enchaînable, `Echap` pour quitter). Le champ source devient `FK` automatiquement. |
 | **Cardinalités MCD bilatérales** | Chaque lien porte **deux cardinalités** (`0,1 / 1,1 / 0,N / 1,N`), une collée à chaque entité sur le canvas (point noir = source, point rouge = cible), modifiables séparément dans les listes de relations. Anciens liens `N:1` migrés auto (`1,N — 1,1`). Reprises à l'export SVG/PNG. |
 | **Canvas infini** | Cartes déplaçables, pan par glisser du fond, **zoom molette libre (20 %–250 %) centré sur le curseur** (pinch trackpad adouci), slider + boutons `−` / `＋`, pastille `%` (clic = 100 %), `Cadrer [F]`, `Recentrer`. **⛶ Plein écran [M]** : masque tout (hero, panneaux, barres) pour travailler sur toute la fenêtre. |
@@ -51,8 +51,9 @@ mono condensé).
 | **Recherche** | Champ dans la barre de stats : les tables non concordantes se grisent, pastilles de résultats (clic = centrer, double-clic sur carte aussi), bouton **＋ Lot depuis recherche**. |
 | **Diagnostic** | Alertes `ERR / WARN` : table sans `PRIMARY KEY`, table isolée, lien orphelin, champ manquant. Compteur dans la barre de stats. |
 | **Exports** | Modale à **onglets SQL / Prisma (.prisma) / Drizzle (.ts) / JSON**, portée **canvas entier ou lot seul**, nom de fichier adapté, **⧉ Copier** + **⤓ Télécharger**, plus **SVG** vectoriel et **PNG** aux couleurs du thème. Boutons rapides SQL / PRISMA / DRIZZLE dans la barre de stats. |
-| **Modèles de base** | Galerie de 6 modèles prêts (`BLOG / E-COMMERCE / SAAS-AUTH / SOCIAL / ÉCOLE / IMMO`) : **+ Ajouter** (fusion + lot) ou **Remplacer**. Carte noire **Modèle perso** : collez votre schema dans la galerie, il atterrit comme vrai modèle dans le panneau gauche. |
+| **Modèles de base** | Galerie de 6 modèles prêts (`BLOG / E-COMMERCE / SAAS-AUTH / SOCIAL / ÉCOLE / IMMO`)  : **+ Ajouter** (ajout + lot) ou **Remplacer**. Carte noire **Modèle perso** : collez votre schema dans la galerie, il atterrit comme vrai modèle dans le panneau gauche. |
 | **Sauvegarde auto** | Modèle + lots + modèles importés persistés (`localStorage`), heure affichée (`✓ 12:03:11`). Import / export JSON pour partager ou versionner. |
+| **Visite guidée** | Au tout premier lancement (aucune donnée en `localStorage`), 5 mini-fenêtres présentent : modèles, liaison 🔗, lots, exports. Rejouable via **? Visite** dans l'aide du panneau gauche. |
 
 ---
 
@@ -89,12 +90,12 @@ ouverts se plient automatiquement quand vous en ajoutez un).
 
 Chaque modèle = un bandeau (clic = **plier / déplier**), nom éditable, badge
 de format détecté, croix pour le retirer du panneau. Déplié : textarea +
-**＋ Fusionner ↗** / **Remplacer** + message de résultat + exemples
+**＋ Ajouter ↗** / **Remplacer** + message de résultat + exemples
 (`Prisma / Drizzle / SQL / Fichier…`).
 
 ### Lots : plusieurs modèles sur la grille
 
-Section **Mes lots (N)** sous les modèles : chaque fusion y crée un lot au nom
+Section **Mes lots (N)** sous les modèles : chaque ajout y crée un lot au nom
 du modèle. Vous pouvez aussi créer un lot vide (`+ Créer`), y ajouter la table
 sélectionnée (`+ table sélect.`), changer son lot depuis la fiche d'une table,
 ou le générer depuis une recherche.
@@ -168,7 +169,7 @@ retour à « tout » via `tout ✕`), nom de fichier adapté (`boutique.prisma`�
 
 Bouton **+ Modèles (6)** (hero) / **Modèles +** (micro-nav) / **+ Voir les 6
 modèles** (panneau) : `BLOG / CMS`, `E-COMMERCE`, `SAAS / AUTH`, `RÉSEAU
-SOCIAL`, `ÉCOLE`, `IMMO / RENDEZ-VOUS`. Chacun : **+ Ajouter** (fusion + lot)
+SOCIAL`, `ÉCOLE`, `IMMO / RENDEZ-VOUS`. Chacun : **+ Ajouter** (ajout + lot)
 ou **Remplacer ↗**. La carte noire **Modèle perso** envoie votre propre schema
 dans le panneau gauche comme un vrai modèle importé.
 
@@ -244,7 +245,7 @@ CREATE TABLE "posts" (
     ├── parsers.ts        # Détection + parseurs Prisma / Drizzle / SQL
     ├── generators.ts     # Générateurs SQL / Prisma / Drizzle
     ├── examples.ts       # Exemples prêts à coller (Prisma, Drizzle, SQL)
-    ├── templates.ts      # 6 modèles de base (lots SQL prêts à fusionner)
+    ├── templates.ts      # 6 modèles de base (lots SQL prêts à ajouter)
     └── index.css         # Thème brutaliste papier/encre/rouge (tickets, hero géant, dot-grid)
 ```
 

@@ -6,10 +6,40 @@ import { toDrizzle, toPrisma, toSQL } from "./generators";
 import { EXAMPLE_DRIZZLE, EXAMPLE_PRISMA, EXAMPLE_SQL } from "./examples";
 import { LOTS, type LotTemplate } from "./templates";
 
-const CARD_W = 252;
-const HEADER_H = 38;
-const ROW_H = 29;
+const CARD_W = 236;
+const HEADER_H = 36;
+const ROW_H = 27;
 const STORE_KEY = "mcd-studio-v2";
+const TOUR_KEY = "mcd-studio-tour-v1";
+
+interface TourStep { target: string | null; title: string; text: string; }
+const TOUR_STEPS: TourStep[] = [
+  {
+    target: null,
+    title: "Bienvenue — visite express",
+    text: "4 mini-fenêtres pour prendre en main : modèles, liaison, lots, exports. Clique Suivant, ou Passer pour explorer seul.",
+  },
+  {
+    target: ".panel.left",
+    title: "01 · Tes modèles importés",
+    text: "Colle chaque schema (Prisma, Drizzle, SQL) dans son modèle. Plie/déplie au clic sur le bandeau, + Modèle pour en ajouter autant que tu veux, puis ＋ Ajouter pour l'envoyer sur la grille.",
+  },
+  {
+    target: "#tour-link-btn",
+    title: "02 · Relie sur la grille",
+    text: "Clique ce bouton 🔗 Relier, puis l'entité source et l'entité cible directement sur le canvas. Champs suggérés, cardinalités MCD 1,N — 1,1 posées près de chaque entité.",
+  },
+  {
+    target: "#tour-lots",
+    title: "03 · Regroupe en lots",
+    text: "Chaque ajout crée son lot coloré : œil pour masquer/afficher, chips pour centrer les tables, export SQL / Prisma / Drizzle du lot seul.",
+  },
+  {
+    target: "#tour-export",
+    title: "04 · Exporte tout",
+    text: "Onglets SQL / Prisma / Drizzle / JSON sur tout le canvas ou un lot seul, plus SVG et PNG. Bon MCD !",
+  },
+];
 
 const TYPE_SUGGESTIONS = [
   "SERIAL", "INTEGER", "BIGINT", "VARCHAR(255)", "VARCHAR(100)", "TEXT",
@@ -42,7 +72,7 @@ function initialModel(): DBModel {
 }
 
 // Un slot = un modèle importé dans le panneau gauche.
-// Chacun garde son texte, se plie/déplie, et peut être fusionné au canvas.
+// Chacun garde son texte, se plie/déplie, et peut être ajouté au canvas.
 export interface ImportSlot {
   id: string;
   name: string;
@@ -77,6 +107,21 @@ export default function App() {
   const [showLots, setShowLots] = useState(false);
   const [savedAt, setSavedAt] = useState("");
   const [query, setQuery] = useState("");
+  // Visite guidée : affichée uniquement au tout premier lancement
+  // (aucune donnée MCD dans le localStorage et visite jamais vue).
+  const [tour, setTour] = useState<{ active: boolean; step: number }>(() => {
+    try {
+      if (localStorage.getItem(TOUR_KEY)) return { active: false, step: 0 };
+      const hasData =
+        localStorage.getItem(STORE_KEY) ||
+        localStorage.getItem("mcd-studio-v1") ||
+        localStorage.getItem(SLOTS_KEY);
+      return { active: !hasData, step: 0 };
+    } catch {
+      return { active: false, step: 0 };
+    }
+  });
+  const [tourPos, setTourPos] = useState<{ top: number; left: number } | null>(null);
   const canvasRef = useRef<HTMLDivElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<null | { tableId: string; dx: number; dy: number }>(null);
@@ -221,6 +266,37 @@ export default function App() {
     } catch { /* ignore */ }
   }, [slots]);
 
+  // Visite guidée : surligne la cible de l'étape et place la carte à côté.
+  const closeTour = useCallback(() => {
+    try {
+      localStorage.setItem(TOUR_KEY, "done");
+    } catch { /* ignore */ }
+    setTour({ active: false, step: 0 });
+  }, []);
+  useEffect(() => {
+    if (!tour.active) return;
+    const step = TOUR_STEPS[tour.step];
+    const place = () => {
+      document.querySelectorAll(".tour-glow").forEach((e) => e.classList.remove("tour-glow"));
+      if (!step.target) { setTourPos(null); return; }
+      const el = document.querySelector(step.target) as HTMLElement | null;
+      if (!el || !el.offsetParent) { setTourPos(null); return; }
+      el.classList.add("tour-glow");
+      const r = el.getBoundingClientRect();
+      const W = 300, H = 210;
+      const left = Math.min(Math.max(12, r.left), Math.max(12, window.innerWidth - W - 12));
+      let top = r.bottom + 12;
+      if (top + H > window.innerHeight - 12) top = Math.max(12, r.top - H - 12);
+      setTourPos({ top, left });
+    };
+    place();
+    window.addEventListener("resize", place);
+    return () => {
+      window.removeEventListener("resize", place);
+      document.querySelectorAll(".tour-glow").forEach((e) => e.classList.remove("tour-glow"));
+    };
+  }, [tour]);
+
   const updateSlot = useCallback((id: string, patch: Partial<ImportSlot>) => {
     setSlots((ss) => ss.map((s) => (s.id === id ? { ...s, ...patch } : s)));
   }, []);
@@ -240,7 +316,7 @@ export default function App() {
     setCustomSource("");
     setShowLots(false);
     setShowLeft(true);
-    setParseMsg("Modèle perso ajouté au panneau gauche : plie/déplie, puis ＋ Fusionner.");
+    setParseMsg("Modèle perso ajouté au panneau gauche : plie/déplie, puis ＋ Ajouter.");
   }, [customName, customSource, addSlot]);
   const deleteSlot = useCallback((id: string) => {
     setSlots((ss) => ss.filter((s) => s.id !== id));
@@ -303,8 +379,8 @@ export default function App() {
   }, [q]);
 
   // ---------- import ----------
-  // Fusion générique : parse un SQL et l'ajoute à droite du canvas.
-  // Sert autant pour "fusionner un import" que pour charger un lot de base.
+  // Ajout générique : parse un SQL et l'ajoute à droite du canvas.
+  // Sert autant pour "ajouter un import" que pour charger un lot de base.
   // Retourne les ids des tables ajoutées (pour créer un lot utilisateur).
   const mergeParsed = useCallback((parsed: DBModel): string[] => {
     const existing = new Set(model.tables.map((t) => t.name));
@@ -363,8 +439,8 @@ export default function App() {
     const ids = mergeParsed(m);
     createLot(`${slot.name} · ${m.tables.length} tables`, ids);
     setSelectedId(ids[0] ?? null);
-    updateSlot(slot.id, { msg: `+ ${m.tables.length} table(s) fusionnée(s) [${k}] → lot « ${slot.name} ».` });
-    setParseMsg(`« ${slot.name} » fusionné : relie ses entités à la main avec leurs cardinalités MCD.`);
+    updateSlot(slot.id, { msg: `+ ${m.tables.length} table(s) ajoutée(s) [${k}] → lot « ${slot.name} ».` });
+    setParseMsg(`« ${slot.name} » ajouté : relie ses entités à la main avec leurs cardinalités MCD.`);
     fitViewSoon();
   }, [mergeParsed, createLot, updateSlot]);
 
@@ -893,7 +969,7 @@ export default function App() {
         <div className="cell"><b>{totalFields}</b> CHAMPS</div>
         <div className="cell"><b className={lots.length ? "red" : ""}>{lots.length}</b> LOTS</div>
         <div className="cell">{issues.length ? <><b className="red">⚠ {issues.length}</b> DIAG</> : <>✓ DIAG OK</>}</div>
-        <div className="cell exp-cell">
+        <div className="cell exp-cell" id="tour-export">
           <button className="exp-btn" onClick={() => openExport("sql")} title="Exporter tout en SQL">SQL</button>
           <button className="exp-btn" onClick={() => openExport("prisma")} title="Exporter tout en Prisma">PRISMA</button>
           <button className="exp-btn" onClick={() => openExport("drizzle")} title="Exporter tout en Drizzle">DRIZZLE</button>
@@ -943,7 +1019,7 @@ export default function App() {
                       />
                       <div className="row">
                         <button className="btn small primary" style={{ flex: 1 }} onClick={() => mergeImportSlot(slot)} title="Garde les modèles déjà sur la grille et ajoute celui-ci dans un lot à son nom">
-                          ＋ Fusionner {i === 0 ? "" : `#${i + 1}`} ↗
+                          ＋ Ajouter {i === 0 ? "" : `#${i + 1}`} ↗
                         </button>
                         <button className="btn small" onClick={() => doImportSlot(slot)} title="Remplace tout le canvas par ce modèle">
                           Remplacer
@@ -975,7 +1051,7 @@ export default function App() {
             </div>
 
             <h4>Mes lots ({lots.length}) +</h4>
-            <p className="muted" style={{ margin: 0 }}>Chaque import fusionné crée son lot. Plusieurs modèles cohabitent sur la même grille.</p>
+            <p className="muted" style={{ margin: 0 }}>Chaque import ajouté crée son lot. Plusieurs modèles cohabitent sur la même grille.</p>
             <div className="row">
               <input
                 placeholder="Nom du lot… (ex : boutique, blog)"
@@ -986,8 +1062,8 @@ export default function App() {
               />
               <button className="btn small primary" onClick={() => createLot(newLotName)}>+ Créer</button>
             </div>
-            <div className="mylots">
-              {lots.length === 0 && <p className="muted">Aucun lot. Fusionne un import ou crée un lot puis assigne-lui des tables.</p>}
+            <div className="mylots" id="tour-lots">
+              {lots.length === 0 && <p className="muted">Aucun lot. Ajoute un import ou crée un lot puis assigne-lui des tables.</p>}
               {lots.map((lot) => (
                 <div key={lot.id} className={`mylot ${lot.hidden ? "hidden" : ""}`}>
                   <div className="mylot-head">
@@ -1048,6 +1124,7 @@ export default function App() {
                 <li>Sauvegarde locale automatique.</li>
               </ul>
               <button className="btn small" onClick={() => fileRef.current?.click()}>Importer JSON…</button>
+              <button className="btn small" onClick={() => setTour({ active: true, step: 0 })} title="Revoir la visite guidée">? Visite</button>
               <input ref={fileRef} type="file" accept=".json" hidden onChange={(e) => {
                 const f = e.target.files?.[0]; if (f) loadJSONFile(f); e.target.value = "";
               }} />
@@ -1072,6 +1149,7 @@ export default function App() {
             <button className="btn small" onClick={resetCam}>Recentrer</button>
             <button className="btn small" onClick={fitView} title="Touche F">Cadrer [F]</button>
             <button
+              id="tour-link-btn"
               className={linkMode ? "btn small primary" : "btn small"}
               onClick={() => { setLinkMode((v) => !v); setLinkFromId(null); }}
               title="Relier 2 entités en cliquant : source puis cible (Echap pour quitter)"
@@ -1341,6 +1419,35 @@ export default function App() {
       </div>
       )}
 
+      {tour.active && (
+        <div className="tour-bg">
+          <div
+            className={`tour-card ${tourPos ? "" : "center"}`}
+            style={tourPos ? { top: tourPos.top, left: tourPos.left } : undefined}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="tour-head">
+              <span className="tour-step">{tour.step + 1} / {TOUR_STEPS.length}</span>
+              <button className="icon-btn" onClick={closeTour} title="Fermer la visite">✕</button>
+            </div>
+            <h3>{TOUR_STEPS[tour.step].title}</h3>
+            <p>{TOUR_STEPS[tour.step].text}</p>
+            <div className="row">
+              {tour.step > 0 && (
+                <button className="btn small" onClick={() => setTour((t) => ({ ...t, step: t.step - 1 }))}>← Retour</button>
+              )}
+              <span style={{ flex: 1 }} />
+              <button className="btn small" onClick={closeTour}>Passer</button>
+              {tour.step < TOUR_STEPS.length - 1 ? (
+                <button className="btn small primary" onClick={() => setTour((t) => ({ ...t, step: t.step + 1 }))}>Suivant →</button>
+              ) : (
+                <button className="btn small primary" onClick={closeTour}>C'est parti ↗</button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       {exportView && (
         <div className="modal-bg" onClick={() => { setExportView(null); setExportLotId(null); }}>
           <div className="modal" onClick={(e) => e.stopPropagation()}>
@@ -1377,7 +1484,7 @@ export default function App() {
           <div className="modal wide" onClick={(e) => e.stopPropagation()}>
             <div className="modal-head">
               <strong>MODÈLES <span>DE BASE+</span></strong>
-              <span className="muted">01—06 · ADD = fusionne · REPLACE = remplace · relie à la main ensuite</span>
+              <span className="muted">01—06 · ADD = ajoute · REPLACE = remplace · relie à la main ensuite</span>
               <button className="icon-btn" onClick={() => setShowLots(false)}>✕ FERMER</button>
             </div>
             <div className="lots-grid">
@@ -1393,7 +1500,7 @@ export default function App() {
                   className="custom-src" placeholder="Colle ici ton CREATE TABLE / model / pgTable…"
                   value={customSource} onChange={(e) => setCustomSource(e.target.value)} spellCheck={false}
                 />
-                <p className="desc">Il apparaîtra dans le panneau gauche comme les autres : pliable, fusionnable, exportable.</p>
+                <p className="desc">Il apparaîtra dans le panneau gauche comme les autres : pliable, ajoutable, exportable.</p>
                 <div className="lot-actions">
                   <button className="go" disabled={!customSource.trim()} onClick={addCustomSlot}>+ Ajouter au panneau ↗</button>
                 </div>
