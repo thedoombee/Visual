@@ -124,8 +124,11 @@ export default function App() {
   const [tourPos, setTourPos] = useState<{ top: number; left: number } | null>(null);
   const canvasRef = useRef<HTMLDivElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
-  const dragRef = useRef<null | { tableId: string; dx: number; dy: number }>(null);
   const panRef = useRef<null | { sx: number; sy: number; cx: number; cy: number }>(null);
+  const worldRef = useRef<HTMLDivElement>(null);
+  // Molette : on accumule les deltas et on zoome 1 fois / frame.
+  const wheelRaf = useRef(0);
+  const wheelAcc = useRef<{ d: number; mx: number; my: number; sens: number } | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const textFileRef = useRef<HTMLInputElement>(null);
 
@@ -283,11 +286,24 @@ export default function App() {
       if (!el || !el.offsetParent) { setTourPos(null); return; }
       el.classList.add("tour-glow");
       const r = el.getBoundingClientRect();
-      const W = 300, H = 210;
-      const left = Math.min(Math.max(12, r.left), Math.max(12, window.innerWidth - W - 12));
-      let top = r.bottom + 12;
-      if (top + H > window.innerHeight - 12) top = Math.max(12, r.top - H - 12);
-      setTourPos({ top, left });
+      const W = 300, H = 230, GAP = 12, vw = window.innerWidth, vh = window.innerHeight;
+      const fits = (top: number, left: number) =>
+        top >= 8 && left >= 8 && top + H <= vh - 8 && left + W <= vw - 8;
+      const overlaps = (top: number, left: number) =>
+        left < r.right + 4 && left + W > r.left - 4 && top < r.bottom + 4 && top + H > r.top - 4;
+      const midTop = Math.min(Math.max(8, r.top), Math.max(8, vh - H - 8));
+      const stayX = Math.min(Math.max(8, r.left), Math.max(8, vw - W - 8));
+      const candidates = [
+        { top: midTop, left: r.right + GAP },   // à droite de la cible
+        { top: midTop, left: r.left - W - GAP }, // à gauche
+        { top: r.bottom + GAP, left: stayX },    // dessous
+        { top: r.top - H - GAP, left: stayX },   // dessus
+      ];
+      const pick =
+        candidates.find((c) => fits(c.top, c.left) && !overlaps(c.top, c.left)) ??
+        candidates.find((c) => !overlaps(c.top, c.left)) ??
+        { top: Math.max(8, (vh - H) / 2), left: Math.max(8, (vw - W) / 2) };
+      setTourPos(pick);
     };
     place();
     window.addEventListener("resize", place);
@@ -505,6 +521,10 @@ export default function App() {
     }));
   }, []);
 
+  // Drag & pan : pendant le geste on écrit le transform DIRECTEMENT dans le DOM
+  // (zéro re-render React) puis on committe UNE fois au relâcher.
+  // C'est ce qui rend le déplacement instantané même avec beaucoup de tables.
+
   // ---------- fields ----------
   const updateField = useCallback((tableId: string, fieldId: string, patch: Partial<DBTable["fields"][number]>) => {
     apply((m) => ({
@@ -699,33 +719,87 @@ export default function App() {
     setSelectedId(t.id);
   }, []);
 
-  // ---------- drag & pan ----------
+  // ---------- drag & pan (direct-DOM pendant le geste, commit au relâcher) ----------
   const onCardMouseDown = (e: React.MouseEvent, t: DBTable) => {
     if ((e.target as HTMLElement).closest("button,input,select")) return;
     if (linkMode) return; // en mode liaison : pas de déplacement, que des clics
     e.stopPropagation();
     setSelectedId(t.id);
-    const rect = canvasRef.current?.getBoundingClientRect();
-    dragRef.current = {
-      tableId: t.id,
-      dx: (e.clientX - (rect?.left ?? 0)) / cam.z - t.x,
-      dy: (e.clientY - (rect?.top ?? 0)) / cam.z - t.y,
+    const cardEl = e.currentTarget as HTMLElement;
+    const z = cam.z;
+    const sx0 = e.clientX, sy0 = e.clientY;
+    let tx = 0, ty = 0, moved = false;
+    const snapshot = model; // état avant déplacement, pour un seul pas d'historique
+    // Liens touchés par cette table : on garde les nœuds SVG + coords de base
+    // pour redessiner courbes, pastilles et cardinalités EN DIRECT (zéro render).
+    interface LiveEdge {
+      path: SVGPathElement | null;
+      fromDot: SVGCircleElement | null; fromLabel: SVGTextElement | null;
+      toDot: SVGCircleElement | null; toLabel: SVGTextElement | null;
+      x1: number; y1: number; x2: number; y2: number;
+      moveFrom: boolean; moveTo: boolean;
+    }
+    const liveEdges: LiveEdge[] = [];
+    if (worldRef.current) {
+      for (const r of visibleRelations) {
+        const moveFrom = r.fromTable === t.name;
+        const moveTo = r.toTable === t.name;
+        if (!moveFrom && !moveTo) continue;
+        const a = byName.get(r.fromTable);
+        const b = byName.get(r.toTable);
+        if (!a || !b) continue;
+        const g = worldRef.current.querySelector(`g.edge[data-rel="${r.id}"]`);
+        if (!g) continue;
+        const texts = g.querySelectorAll("text");
+        liveEdges.push({
+          path: g.querySelector("path.edge-line"),
+          fromDot: g.querySelector("circle.dot.from"),
+          fromLabel: (texts[0] as SVGTextElement | undefined) ?? null,
+          toDot: g.querySelector("circle.dot.to"),
+          toLabel: (texts[1] as SVGTextElement | undefined) ?? null,
+          x1: a.x + CARD_W, y1: fieldY(a, r.fromField),
+          x2: b.x, y2: fieldY(b, r.toField),
+          moveFrom, moveTo,
+        });
+      }
+    }
+    const paintEdges = () => {
+      for (const le of liveEdges) {
+        const nx1 = le.moveFrom ? le.x1 + tx : le.x1;
+        const ny1 = le.moveFrom ? le.y1 + ty : le.y1;
+        const nx2 = le.moveTo ? le.x2 + tx : le.x2;
+        const ny2 = le.moveTo ? le.y2 + ty : le.y2;
+        le.path?.setAttribute("d", edgePath(nx1, ny1, nx2, ny2));
+        if (le.moveFrom) {
+          le.fromDot?.setAttribute("cx", String(nx1));
+          le.fromDot?.setAttribute("cy", String(ny1));
+          le.fromLabel?.setAttribute("x", String(nx1 + 9));
+          le.fromLabel?.setAttribute("y", String(ny1 - 8));
+        }
+        if (le.moveTo) {
+          le.toDot?.setAttribute("cx", String(nx2));
+          le.toDot?.setAttribute("cy", String(ny2));
+          le.toLabel?.setAttribute("x", String(nx2 - 9));
+          le.toLabel?.setAttribute("y", String(ny2 - 8));
+        }
+      }
     };
     const move = (ev: MouseEvent) => {
-      const r = canvasRef.current?.getBoundingClientRect();
-      if (!dragRef.current || !r) return;
-      moveTable(dragRef.current.tableId, (ev.clientX - r.left) / cam.z - dragRef.current.dx, (ev.clientY - r.top) / cam.z - dragRef.current.dy);
+      tx = (ev.clientX - sx0) / z;
+      ty = (ev.clientY - sy0) / z;
+      if (Math.abs(ev.clientX - sx0) + Math.abs(ev.clientY - sy0) > 3) moved = true;
+      // La carte + ses liens suivent le curseur sans aucun re-render.
+      cardEl.style.transform = `translate(${tx}px, ${ty}px)`;
+      paintEdges();
     };
     const up = () => {
-      dragRef.current = null;
-      // commit le déplacement dans l'historique (état final)
-      setModel((m) => {
-        setHist((h) => [...h.slice(-49), m]);
-        return m;
-      });
-      setFuture([]);
       window.removeEventListener("mousemove", move);
       window.removeEventListener("mouseup", up);
+      cardEl.style.transform = "";
+      if (!moved) return;
+      moveTable(t.id, Math.round(t.x + tx), Math.round(t.y + ty));
+      setHist((h) => [...h.slice(-49), snapshot]);
+      setFuture([]);
     };
     window.addEventListener("mousemove", move);
     window.addEventListener("mouseup", up);
@@ -733,15 +807,23 @@ export default function App() {
 
   const onCanvasMouseDown = (e: React.MouseEvent) => {
     if ((e.target as HTMLElement).closest(".table-card")) return;
-    panRef.current = { sx: e.clientX, sy: e.clientY, cx: cam.x, cy: cam.y };
+    const world = worldRef.current;
+    if (!world) return;
+    const sx = e.clientX, sy = e.clientY, cx = cam.x, cy = cam.y, z = cam.z;
+    panRef.current = { sx, sy, cx, cy };
+    let lx = cx, ly = cy;
     const move = (ev: MouseEvent) => {
       if (!panRef.current) return;
-      setCam((c) => ({ ...c, x: panRef.current!.cx + (ev.clientX - panRef.current!.sx), y: panRef.current!.cy + (ev.clientY - panRef.current!.sy) }));
+      lx = cx + (ev.clientX - sx);
+      ly = cy + (ev.clientY - sy);
+      // Déplacement pur compositeur : aucun re-render, aucun repaint du fond.
+      world.style.transform = `translate(${lx}px, ${ly}px) scale(${z})`;
     };
     const up = () => {
       panRef.current = null;
       window.removeEventListener("mousemove", move);
       window.removeEventListener("mouseup", up);
+      setCam({ x: lx, y: ly, z }); // UN seul render : tout se recale (cartes, liens)
     };
     window.addEventListener("mousemove", move);
     window.addEventListener("mouseup", up);
@@ -761,16 +843,27 @@ export default function App() {
       e.preventDefault();
       e.stopPropagation();
       const rect = el.getBoundingClientRect();
-      const mx = e.clientX - rect.left;
-      const my = e.clientY - rect.top;
-      const sens = e.ctrlKey || e.metaKey ? 0.01 : 0.0018; // pinch trackpad = plus doux
-      setCam((c) => {
-        const factor = Math.exp(-e.deltaY * sens);
-        const z = Math.min(2.5, Math.max(0.2, +(c.z * factor).toFixed(3)));
-        if (z === c.z) return c;
-        const wx = (mx - c.x) / c.z;
-        const wy = (my - c.y) / c.z;
-        return { x: mx - wx * z, y: my - wy * z, z };
+      const acc = wheelAcc.current;
+      wheelAcc.current = {
+        d: (acc?.d ?? 0) + e.deltaY,
+        mx: e.clientX - rect.left,
+        my: e.clientY - rect.top,
+        sens: e.ctrlKey || e.metaKey ? 0.01 : 0.0018, // pinch trackpad = plus doux
+      };
+      if (wheelRaf.current) return;
+      wheelRaf.current = requestAnimationFrame(() => {
+        wheelRaf.current = 0;
+        const w = wheelAcc.current;
+        wheelAcc.current = null;
+        if (!w) return;
+        setCam((c) => {
+          const factor = Math.exp(-w.d * w.sens);
+          const z = Math.min(2.5, Math.max(0.2, +(c.z * factor).toFixed(3)));
+          if (z === c.z) return c;
+          const wx = (w.mx - c.x) / c.z;
+          const wy = (w.my - c.y) / c.z;
+          return { x: w.mx - wx * z, y: w.my - wy * z, z };
+        });
       });
     };
     wrap.addEventListener("wheel", handler, { passive: false });
@@ -1200,7 +1293,7 @@ export default function App() {
           )}
           <div ref={canvasRef} className={`canvas ${linkMode ? "linking" : ""}`} onMouseDown={onCanvasMouseDown} onClick={() => { if (linkMode) setLinkFromId(null); else setSelectedId(null); }}>
             <div className="canvas-bgword">SCHEMA<span>+</span></div>
-            <div className="world" style={{ transform: `translate(${cam.x}px, ${cam.y}px) scale(${cam.z})` }}>
+            <div ref={worldRef} className="world" style={{ transform: `translate(${cam.x}px, ${cam.y}px) scale(${cam.z})` }}>
               <svg className="edges" style={{ overflow: "visible" }}>
                 {visibleRelations.map((r) => {
                   const a = byName.get(r.fromTable);
@@ -1210,7 +1303,7 @@ export default function App() {
                   const x2 = b.x, y2 = fieldY(b, r.toField);
                   const { a: cardA, b: cardB } = mcdCards(r);
                   return (
-                    <g key={r.id} className="edge" onClick={(e) => e.stopPropagation()}>
+                    <g key={r.id} data-rel={r.id} className="edge" onClick={(e) => e.stopPropagation()}>
                       <path d={edgePath(x1, y1, x2, y2)} className="edge-line" />
                       <circle cx={x1} cy={y1} r={4} className="dot from" />
                       <circle cx={x2} cy={y2} r={4} className="dot to" />
@@ -1420,7 +1513,8 @@ export default function App() {
       )}
 
       {tour.active && (
-        <div className="tour-bg">
+        <>
+          <div className="tour-bg" />
           <div
             className={`tour-card ${tourPos ? "" : "center"}`}
             style={tourPos ? { top: tourPos.top, left: tourPos.left } : undefined}
@@ -1445,7 +1539,7 @@ export default function App() {
               )}
             </div>
           </div>
-        </div>
+        </>
       )}
 
       {exportView && (

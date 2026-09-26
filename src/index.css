@@ -186,7 +186,7 @@ body {
   color: transparent; -webkit-text-stroke: 1.5px #b9b4a8; opacity: .8; white-space: nowrap;
 }
 .canvas-bgword span { -webkit-text-stroke: 0; color: var(--red); opacity: .9; }
-.world { position: absolute; left: 0; top: 0; transform-origin: 0 0; width: 10px; height: 10px; }
+.world { position: absolute; left: 0; top: 0; transform-origin: 0 0; width: 10px; height: 10px; will-change: transform; }
 .edges { position: absolute; left: 0; top: 0; width: 6000px; height: 6000px; pointer-events: none; }
 .edge-line { fill: none; stroke: var(--ink); stroke-width: 1.8; pointer-events: stroke; }
 .edge:hover .edge-line { stroke: var(--red); stroke-width: 2.6; }
