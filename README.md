@@ -1,4 +1,4 @@
-# MCD°STUDIO
+# MCD Studio
 
 > Collez vos schemas **Prisma**, **Drizzle** ou **SQL**, combinez **autant de
 > modèles que vous voulez sur la même grille**, reliez les entités à la main
