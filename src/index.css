@@ -109,7 +109,8 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .panel h4::after { content: ""; flex: 1; border-top: 1px dotted var(--muted); }
 .badge {
   font-family: var(--mono); font-size: 10px; font-weight: 700; padding: 2px 9px;
-  border: 1.5px solid var(--ink); text-transform: uppercase; background: var(--card);
+  border: 1.5px solid var(--ink); text-transform: uppercase;
+  background: var(--card); color: var(--ink);
 }
 .badge.prisma { background: var(--ink); color: #fff; }
 .badge.drizzle { background: #fff; color: var(--ink); box-shadow: 2px 2px 0 var(--red); }
@@ -340,7 +341,6 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
   font-family: var(--mono); font-size: 12px; font-weight: 700; text-transform: uppercase;
 }
 .slot-name:focus { outline: 1.5px solid var(--red); background: #fff; color: var(--ink); }
-.slot .badge { background: var(--card); }
 .slot-head .icon-btn { color: #cfcabd; }
 .slot-head .icon-btn:hover { color: var(--red); }
 .slot.folded .slot-head .icon-btn { color: var(--muted); }
