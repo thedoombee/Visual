@@ -1,4 +1,4 @@
-export interface LotTemplate {
+export interface StarterPack {
   id: string;
   numero: string;
   titre: string;
@@ -7,7 +7,7 @@ export interface LotTemplate {
   sql: string;
 }
 
-export const LOTS: LotTemplate[] = [
+export const STARTERS: StarterPack[] = [
   {
     id: "blog",
     numero: "01",

@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { DBLot, DBModel, DBRelation, DBTable } from "./types";
-import { LOT_COLORS, MCD_CARDS, mcdCards, uid } from "./types";
+import type { DBModel, DBRelation, DBTable } from "./types";
+import { MCD_CARDS, mcdCards, uid } from "./types";
 import { detectKind, parseAuto } from "./parsers";
 import { toDrizzle, toPrisma, toSQL } from "./generators";
 import { EXAMPLE_DRIZZLE, EXAMPLE_PRISMA, EXAMPLE_SQL } from "./examples";
-import { LOTS, type LotTemplate } from "./templates";
+import { STARTERS, type StarterPack } from "./templates";
 
 const CARD_W = 236;
 const HEADER_H = 36;
@@ -17,7 +17,7 @@ const TOUR_STEPS: TourStep[] = [
   {
     target: null,
     title: "Bienvenue — visite express",
-    text: "4 mini-fenêtres pour prendre en main : modèles, liaison, lots, exports. Clique Suivant, ou Passer pour explorer seul.",
+    text: "3 mini-fenêtres pour prendre en main : modèles, liaison, exports. Clique Suivant, ou Passer pour explorer seul.",
   },
   {
     target: ".panel.left",
@@ -30,14 +30,9 @@ const TOUR_STEPS: TourStep[] = [
     text: "Clique ce bouton ⇄ Relier, puis l'entité source et l'entité cible directement sur le canvas. Champs suggérés, cardinalités MCD 1,N — 1,1 posées près de chaque entité.",
   },
   {
-    target: "#tour-lots",
-    title: "03 · Regroupe en lots",
-    text: "Chaque ajout crée son lot coloré : œil pour masquer/afficher, chips pour centrer les tables, export SQL / Prisma / Drizzle du lot seul.",
-  },
-  {
     target: "#tour-export",
-    title: "04 · Exporte tout",
-    text: "Onglets SQL / Prisma / Drizzle / JSON sur tout le canvas ou un lot seul, plus SVG et PNG. Bon MCD !",
+    title: "03 · Exporte tout",
+    text: "Onglets SQL / Prisma / Drizzle / JSON sur tout le canvas, plus SVG et PNG. La barre du bas suit ta sélection, ton zoom et tes actions. Bon MCD !",
   },
 ];
 
@@ -65,7 +60,12 @@ function initialModel(): DBModel {
     const raw = localStorage.getItem(STORE_KEY) ?? localStorage.getItem("mcd-studio-v1");
     if (raw) {
       const parsed = JSON.parse(raw) as DBModel;
-      if (parsed.tables?.length) return { ...parsed, lots: parsed.lots ?? [] };
+      if (parsed.tables?.length) {
+        // Migration : les anciens modèles sauvegardés peuvent contenir des lots, ignorés.
+        const clean: DBModel & { lots?: unknown } = { ...parsed };
+        delete clean.lots;
+        return clean;
+      }
     }
   } catch { /* ignore */ }
   return parseAuto(EXAMPLE_SQL).model;
@@ -79,6 +79,7 @@ export interface ImportSlot {
   source: string;
   collapsed: boolean;
   msg: string;
+  hidden?: boolean; // modèle masqué sur le canvas
 }
 const SLOTS_KEY = "mcd-studio-slots-v1";
 function loadSlots(): ImportSlot[] {
@@ -104,7 +105,7 @@ export default function App() {
   const [cam, setCam] = useState({ x: 20, y: 20, z: 1 });
   const [focusMode, setFocusMode] = useState(false);
   const [exportView, setExportView] = useState<null | "sql" | "prisma" | "drizzle" | "json">(null);
-  const [showLots, setShowLots] = useState(false);
+  const [showGallery, setShowGallery] = useState(false);
   const [savedAt, setSavedAt] = useState("");
   const [query, setQuery] = useState("");
   // Visite guidée : affichée uniquement au tout premier lancement
@@ -170,84 +171,28 @@ export default function App() {
     [model, selectedId]
   );
   const byName = useMemo(() => new Map(model.tables.map((t) => [t.name, t])), [model]);
-  const [exportLotId, setExportLotId] = useState<string | null>(null);
-  const [newLotName, setNewLotName] = useState("");
-
-  // ---------- lots utilisateur (plusieurs modèles sur la même grille) ----------
-  const lots = useMemo(() => model.lots ?? [], [model]);
-  const lotOfTable = useMemo(() => {
-    const m = new Map<string, DBLot>();
-    for (const lot of lots) for (const id of lot.tableIds) if (!m.has(id)) m.set(id, lot);
-    return m;
-  }, [lots]);
-  const hiddenTableIds = useMemo(() => {
-    const s = new Set<string>();
-    for (const lot of lots) if (lot.hidden) for (const id of lot.tableIds) s.add(id);
-    return s;
-  }, [lots]);
-  const visibleTables = useMemo(() => model.tables.filter((t) => !hiddenTableIds.has(t.id)), [model, hiddenTableIds]);
+  // Visibilité par modèle : un slot masqué cache ses tables (et leurs liens).
+  // Les tables sans slotId (créées à la main, anciens modèles) restent visibles.
+  const hiddenSlotIds = useMemo(
+    () => new Set(slots.filter((s) => s.hidden).map((s) => s.id)),
+    [slots]
+  );
+  const visibleTables = useMemo(
+    () => model.tables.filter((t) => !t.slotId || !hiddenSlotIds.has(t.slotId)),
+    [model, hiddenSlotIds]
+  );
   const visibleNames = useMemo(() => new Set(visibleTables.map((t) => t.name)), [visibleTables]);
   const visibleRelations = useMemo(
     () => model.relations.filter((r) => visibleNames.has(r.fromTable) && visibleNames.has(r.toTable)),
     [model, visibleNames]
   );
+  const slotTableCount = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const t of model.tables) if (t.slotId) m.set(t.slotId, (m.get(t.slotId) ?? 0) + 1);
+    return m;
+  }, [model]);
 
-  const createLot = useCallback((name: string, tableIds: string[] = []) => {
-    const clean = name.trim() || `Lot ${lots.length + 1}`;
-    const lot: DBLot = {
-      id: uid("lot"),
-      name: clean,
-      color: LOT_COLORS[lots.length % LOT_COLORS.length],
-      tableIds: [...new Set(tableIds)],
-    };
-    apply((m) => {
-      const prevLots = m.lots ?? [];
-      // 1 table = 1 lot max : on retire les tables des autres lots
-      const others = prevLots.map((l) => ({ ...l, tableIds: l.tableIds.filter((id) => !lot.tableIds.includes(id)) }));
-      return { ...m, lots: [...others, lot] };
-    });
-    setNewLotName("");
-    return lot.id;
-  }, [apply, lots.length]);
-
-  const renameLot = useCallback((id: string, name: string) => {
-    apply((m) => ({ ...m, lots: (m.lots ?? []).map((l) => (l.id === id ? { ...l, name } : l)) }));
-  }, [apply]);
-
-  const deleteLot = useCallback((id: string, deleteTables: boolean) => {
-    apply((m) => {
-      const lot = (m.lots ?? []).find((l) => l.id === id);
-      if (!lot) return m;
-      if (!deleteTables) return { ...m, lots: (m.lots ?? []).filter((l) => l.id !== id) };
-      const gone = new Set(lot.tableIds);
-      const goneNames = new Set(m.tables.filter((t) => gone.has(t.id)).map((t) => t.name));
-      if (selectedId && gone.has(selectedId)) setSelectedId(null);
-      return {
-        tables: m.tables.filter((t) => !gone.has(t.id)),
-        relations: m.relations.filter((r) => !goneNames.has(r.fromTable) && !goneNames.has(r.toTable)),
-        lots: (m.lots ?? []).filter((l) => l.id !== id).map((l) => ({ ...l, tableIds: l.tableIds.filter((x) => !gone.has(x)) })),
-      };
-    });
-  }, [apply, selectedId]);
-
-  const toggleLotHidden = useCallback((id: string) => {
-    apply((m) => ({ ...m, lots: (m.lots ?? []).map((l) => (l.id === id ? { ...l, hidden: !l.hidden } : l)) }));
-  }, [apply]);
-
-  const setTableLot = useCallback((tableId: string, lotId: string | null) => {
-    apply((m) => ({
-      ...m,
-      lots: (m.lots ?? []).map((l) => ({
-        ...l,
-        tableIds: lotId === l.id
-          ? (l.tableIds.includes(tableId) ? l.tableIds : [...l.tableIds, tableId])
-          : l.tableIds.filter((x) => x !== tableId),
-      })),
-    }));
-  }, [apply]);
-
-  const openExport = useCallback((view: "sql" | "prisma" | "drizzle" | "json", lotId: string | null = null) => {
-    setExportLotId(lotId);
+  const openExport = useCallback((view: "sql" | "prisma" | "drizzle" | "json") => {
     setExportView(view);
   }, []);
 
@@ -331,13 +276,20 @@ export default function App() {
     addSlot(customName || undefined, customSource);
     setCustomName("");
     setCustomSource("");
-    setShowLots(false);
+    setShowGallery(false);
     setShowLeft(true);
     setParseMsg("Modèle perso ajouté au panneau gauche : plie/déplie, puis ＋ Ajouter.");
   }, [customName, customSource, addSlot]);
   const deleteSlot = useCallback((id: string) => {
     setSlots((ss) => ss.filter((s) => s.id !== id));
-  }, []);
+    // Les tables du modèle redeviennent "sans modèle" : toujours visibles.
+    if (model.tables.some((t) => t.slotId === id)) {
+      apply((m) => ({
+        ...m,
+        tables: m.tables.map((t) => (t.slotId === id ? { ...t, slotId: undefined } : t)),
+      }));
+    }
+  }, [apply, model]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -351,15 +303,15 @@ export default function App() {
         e.preventDefault(); redo(); return;
       }
       if (e.key === "Escape") {
-        if (exportView) { setExportView(null); setExportLotId(null); return; }
-        if (showLots) { setShowLots(false); return; }
+        if (exportView) { setExportView(null); return; }
+        if (showGallery) { setShowGallery(false); return; }
         if (typing) return;
         if (linkModeRef.current) { setLinkMode(false); setLinkFromId(null); }
         else setFocusMode(false);
         return;
       }
       if (typing) return;
-      if (exportView || showLots) return; // modale ouverte : que Echap / undo / redo
+      if (exportView || showGallery) return; // modale ouverte : que Echap / undo / redo
       if (e.key === "[") setShowLeft((v) => !v);
       else if (e.key === "]") setShowRight((v) => !v);
       else if (e.key.toLowerCase() === "f") fitView();
@@ -368,7 +320,7 @@ export default function App() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [undo, redo, model, exportView, showLots]);
+  }, [undo, redo, model, exportView, showGallery]);
 
   // ---------- validation ----------
   const issues = useMemo(() => {
@@ -402,13 +354,16 @@ export default function App() {
 
   // ---------- import ----------
   // Ajout générique : parse un SQL et l'ajoute à droite du canvas.
-  // Sert autant pour "ajouter un import" que pour charger un lot de base.
-  // Retourne les ids des tables ajoutées (pour créer un lot utilisateur).
-  const mergeParsed = useCallback((parsed: DBModel): string[] => {
+  // Chaque table importée est taguée avec le slot d'origine (visibilité par modèle).
+  // Retourne les ids des tables ajoutées.
+  const mergeParsed = useCallback((parsed: DBModel, slotId?: string): string[] => {
     const existing = new Set(model.tables.map((t) => t.name));
     const rename = new Map<string, string>();
     const incoming: DBModel = {
-      tables: parsed.tables.map((t) => ({ ...t, id: uid("t"), fields: t.fields.map((f) => ({ ...f, id: uid("f") })) })),
+      tables: parsed.tables.map((t) => ({
+        ...t, id: uid("t"), slotId,
+        fields: t.fields.map((f) => ({ ...f, id: uid("f") })),
+      })),
       relations: parsed.relations.map((r) => ({ ...r, id: uid("rel") })),
     };
     for (const t of incoming.tables) {
@@ -436,21 +391,19 @@ export default function App() {
     return ids;
   }, [apply, model]);
 
-  // Ajoute CE modèle au canvas sans effacer ceux déjà présents,
-  // puis regroupe ses tables dans un lot au nom du modèle.
+  // Ajoute CE modèle au canvas sans effacer ceux déjà présents.
   const mergeImportSlot = useCallback((slot: ImportSlot) => {
     const { model: m, kind: k } = parseAuto(slot.source);
     if (!m.tables.length) {
       updateSlot(slot.id, { msg: "Aucune table détectée. Vérifie ton schema (CREATE TABLE / model / pgTable)." });
       return;
     }
-    const ids = mergeParsed(m);
-    createLot(`${slot.name} · ${m.tables.length} tables`, ids);
+    const ids = mergeParsed(m, slot.id);
     setSelectedId(ids[0] ?? null);
-    updateSlot(slot.id, { msg: `+ ${m.tables.length} table(s) ajoutée(s) [${k}] → lot « ${slot.name} ».` });
+    updateSlot(slot.id, { msg: `+ ${m.tables.length} table(s) ajoutée(s) [${k}].` });
     setParseMsg(`« ${slot.name} » ajouté : relie ses entités à la main avec leurs cardinalités MCD.`);
     fitViewSoon();
-  }, [mergeParsed, createLot, updateSlot]);
+  }, [mergeParsed, updateSlot]);
 
   // ---------- tables ----------
   const addTable = useCallback(() => {
@@ -485,7 +438,6 @@ export default function App() {
       return {
         tables: m.tables.filter((x) => x.id !== id),
         relations: m.relations.filter((r) => r.fromTable !== t.name && r.toTable !== t.name),
-        lots: (m.lots ?? []).map((l) => ({ ...l, tableIds: l.tableIds.filter((x) => x !== id) })),
       };
     });
     setSelectedId(null);
@@ -659,19 +611,18 @@ export default function App() {
   }, [linkFromId, model, apply, suggestFromField, suggestToField]);
 
   // ---------- galerie : un modèle choisi S'AJOUTE aux autres (jamais de remplacement) ----------
-  // Il rejoint le canvas (à droite) + un lot à son nom + un slot du panneau gauche.
-  const loadLot = useCallback((lot: LotTemplate) => {
-    const parsed = parseAuto(lot.sql).model;
-    const ids = mergeParsed(parsed);
-    const name = `${lot.numero} · ${lot.titre}`;
-    createLot(name, ids);
-    const slotId = addSlot(name, lot.sql);
-    updateSlot(slotId, { msg: `Ajouté : ${parsed.tables.length} table(s) sur le canvas et dans « Mes lots ».` });
+  // Il rejoint le canvas (à droite) + un slot du panneau gauche.
+  const loadStarter = useCallback((pack: StarterPack) => {
+    const parsed = parseAuto(pack.sql).model;
+    const name = `${pack.numero} · ${pack.titre}`;
+    const slotId = addSlot(name, pack.sql);
+    const ids = mergeParsed(parsed, slotId);
+    updateSlot(slotId, { msg: `Ajouté : ${parsed.tables.length} table(s) sur le canvas.` });
     setSelectedId(ids[0] ?? null);
     setParseMsg(`« ${name} » ajouté aux modèles présents.`);
-    setShowLots(false);
+    setShowGallery(false);
     fitViewSoon();
-  }, [mergeParsed, createLot, addSlot, updateSlot]);
+  }, [mergeParsed, addSlot, updateSlot]);
 
   // ---------- layout / camera ----------
   const autoLayout = useCallback(() => {
@@ -734,7 +685,7 @@ export default function App() {
     }
     const liveEdges: LiveEdge[] = [];
     if (worldRef.current) {
-      for (const r of visibleRelations) {
+      for (const r of model.relations) {
         const moveFrom = r.fromTable === t.name;
         const moveTo = r.toTable === t.name;
         if (!moveFrom && !moveTo) continue;
@@ -876,36 +827,26 @@ export default function App() {
   };
   const resetCam = () => setCam({ x: 20, y: 20, z: 1 });
 
-  // ---------- exports (tout le canvas OU un seul lot) ----------
-  const exportLot = useMemo(
-    () => (exportLotId ? lots.find((l) => l.id === exportLotId) ?? null : null),
-    [exportLotId, lots]
-  );
-  const exportModel = useMemo(() => {
-    if (!exportLot) return model;
-    const ids = new Set(exportLot.tableIds);
-    const tables = model.tables.filter((t) => ids.has(t.id));
-    const names = new Set(tables.map((t) => t.name));
-    return {
-      ...model,
-      tables,
-      relations: model.relations.filter((r) => names.has(r.fromTable) && names.has(r.toTable)),
-    };
-  }, [exportLot, model]);
+  // ---------- exports ----------
+  // SQL / Prisma / Drizzle / SVG / PNG = tables visibles uniquement.
+  // JSON = sauvegarde complète (modèles masqués inclus).
+  const exportVisible = useMemo(() => ({
+    tables: visibleTables,
+    relations: visibleRelations,
+  }), [visibleTables, visibleRelations]);
   const exportText = useMemo(() => {
-    if (exportView === "sql") return toSQL(exportModel);
-    if (exportView === "prisma") return toPrisma(exportModel);
-    if (exportView === "drizzle") return toDrizzle(exportModel);
-    if (exportView === "json") return JSON.stringify(exportModel, null, 2);
+    if (exportView === "sql") return toSQL(exportVisible);
+    if (exportView === "prisma") return toPrisma(exportVisible);
+    if (exportView === "drizzle") return toDrizzle(exportVisible);
+    if (exportView === "json") return JSON.stringify(model, null, 2);
     return "";
-  }, [exportView, exportModel]);
+  }, [exportView, model, exportVisible]);
   const exportFileName = useMemo(() => {
-    const base = exportLot ? exportLot.name.toLowerCase().replace(/[^a-z0-9]+/gi, "-").replace(/^-|-$/g, "") || "lot" : "mcd";
-    if (exportView === "json") return `${base}.json`;
-    if (exportView === "drizzle") return `${base}.ts`;
-    if (exportView === "prisma") return `${base}.prisma`;
-    return `${base}.sql`;
-  }, [exportLot, exportView]);
+    if (exportView === "json") return "mcd.json";
+    if (exportView === "drizzle") return "schema.ts";
+    if (exportView === "prisma") return "schema.prisma";
+    return "mcd.sql";
+  }, [exportView]);
 
   const download = (filename: string, content: string, mime = "text/plain") => {
     const a = document.createElement("a");
@@ -915,18 +856,18 @@ export default function App() {
     URL.revokeObjectURL(a.href);
   };
 
-  const exportByName = useMemo(() => new Map(exportModel.tables.map((t) => [t.name, t])), [exportModel]);
   const exportSVGString = useCallback(() => {
     const pad = 60;
-    const tables = exportModel.tables;
+    const tables = visibleTables;
     const maxX = (tables.length ? Math.max(...tables.map((t) => t.x + CARD_W), 800) : 800) + pad;
     const maxY = (tables.length ? Math.max(...tables.map((t) => t.y + cardH(t)), 600) : 600) + pad;
     const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
     let s = `<svg xmlns="http://www.w3.org/2000/svg" width="${maxX}" height="${maxY}" font-family="Space Mono,monospace">`;
     s += `<rect width="100%" height="100%" fill="#E9E7E1"/>`;
-    for (const r of exportModel.relations) {
-      const a = exportByName.get(r.fromTable);
-      const b = exportByName.get(r.toTable);
+    const vByName = new Map(tables.map((t) => [t.name, t]));
+    for (const r of visibleRelations) {
+      const a = vByName.get(r.fromTable);
+      const b = vByName.get(r.toTable);
       if (!a || !b) continue;
       const x1 = a.x + CARD_W, y1 = fieldY(a, r.fromField);
       const x2 = b.x, y2 = fieldY(b, r.toField);
@@ -936,7 +877,7 @@ export default function App() {
       s += `<text x="${x1 + 9}" y="${y1 - 8}" font-size="10" font-weight="700" fill="#111111">${cA}</text>`;
       s += `<text x="${x2 - 9}" y="${y2 - 8}" font-size="10" font-weight="700" fill="#111111" text-anchor="end">${cB}</text>`;
     }
-    for (const t of exportModel.tables) {
+    for (const t of tables) {
       const h = cardH(t);
       s += `<g><rect x="${t.x}" y="${t.y}" width="${CARD_W}" height="${h}" fill="#FBFAF7" stroke="#111111" stroke-width="1.5"/>`;
       s += `<rect x="${t.x}" y="${t.y}" width="${CARD_W}" height="${HEADER_H}" fill="#111111"/>`;
@@ -949,7 +890,7 @@ export default function App() {
       s += `</g>`;
     }
     return s + `</svg>`;
-  }, [exportModel, exportByName]);
+  }, [visibleTables, visibleRelations]);
 
   const exportPNG = useCallback(() => {
     const svg = exportSVGString();
@@ -978,7 +919,7 @@ export default function App() {
 
   const newDiagram = () => {
     if (!confirm("Tout effacer et repartir de zéro ?")) return;
-    apply({ tables: [], relations: [], lots: [] });
+    apply({ tables: [], relations: [] });
     setSelectedId(null);
   };
 
@@ -988,7 +929,7 @@ export default function App() {
       try {
         const data = JSON.parse(String(rd.result)) as DBModel;
         if (!data.tables) throw new Error("bad");
-        apply({ ...data, lots: data.lots ?? [] });
+        apply({ tables: data.tables, relations: data.relations ?? [] });
         setSelectedId(data.tables[0]?.id ?? null);
       } catch { alert("Fichier JSON invalide."); }
     };
@@ -1014,58 +955,47 @@ export default function App() {
   return (
     <div className={`app ${focusMode ? "focus" : ""}`}>
       {!focusMode && (
-      <nav className="micronav">
-        <div className="mn-group">
-          <button onClick={() => { setShowLeft(true); setShowRight(true); }}>Tables</button>
-          <button onClick={() => setShowLots(true)}>Modèles <span className="plus">+</span></button>
-          <button onClick={() => setShowLeft(!showLeft)}>Import [</button>
-          <button onClick={() => openExport("sql")}>Export</button>
+      <nav className="cmdbar">
+        <div className="cmd-brand" title="MCD Studio — Prisma · Drizzle · SQL → diagramme">
+          MCD<span className="red">+</span>STUDIO
         </div>
-        <div className="live"><i />MCD°STUDIO — PAPER / INK / RED <span className="plus">+</span> TICKET Nº001</div>
-        <div className="mn-group">
-          <button onClick={undo} disabled={!hist.length} title="Ctrl+Z">Undo</button>
-          <button onClick={redo} disabled={!future.length} title="Ctrl+Y">Redo</button>
-          <button onClick={() => setFocusMode(true)} title="Plein écran canvas (M)">⤢ Agrandir</button>
-          <button onClick={() => setShowRight(!showRight)}>Édition ]</button>
+        <div
+          className="cmd-stats"
+          title={issues.length ? issues.slice(0, 5).map((i) => `• ${i.text}`).join("\n") : "Aucun problème détecté"}
+        >
+          <span><b>{model.tables.length}</b> TABLES</span>
+          <span><b className="red">{model.relations.length}</b> LIENS</span>
+          <span><b>{totalFields}</b> CHAMPS</span>
+          {issues.length
+            ? <span className="cmd-diag err">! {issues.length}</span>
+            : <span className="cmd-diag ok">✓</span>}
         </div>
+        <input
+          className="cmd-search" placeholder="Rechercher table / champ…"
+          value={query} onChange={(e) => setQuery(e.target.value)}
+        />
+        <div className="cmd-group" id="tour-export" title="Exporter le canvas">
+          <button className="exp-btn" onClick={() => openExport("sql")}>SQL</button>
+          <button className="exp-btn" onClick={() => openExport("prisma")}>PRISMA</button>
+          <button className="exp-btn" onClick={() => openExport("drizzle")}>DRIZZLE</button>
+          <button className="exp-btn" onClick={() => openExport("json")}>JSON</button>
+        </div>
+        <div className="cmd-group">
+          <button className="btn small" onClick={undo} disabled={!hist.length} title="Annuler (Ctrl+Z)">↩</button>
+          <button className="btn small" onClick={redo} disabled={!future.length} title="Rétablir (Ctrl+Y)">↪</button>
+        </div>
+        <button className="btn small primary" onClick={() => setShowGallery(true)} title="Modèles de base + modèle perso">+ Modèles</button>
+        <div className="cmd-group">
+          <button className={showLeft ? "btn small active" : "btn small"} onClick={() => setShowLeft(!showLeft)} title="Panneau des modèles ( [ )">
+            {showLeft ? "⟨ Modèles" : "Modèles ⟩"}
+          </button>
+          <button className={showRight ? "btn small active" : "btn small"} onClick={() => setShowRight(!showRight)} title="Panneau d'édition ( ] )">
+            {showRight ? "Édition ⟩" : "⟨ Édition"}
+          </button>
+          <button className="btn small" onClick={() => setFocusMode(true)} title="Plein écran canvas (M)">⤢</button>
+        </div>
+        {savedAt && <span className="cmd-saved">✓ {savedAt}</span>}
       </nav>
-      )}
-
-      {!focusMode && (
-      <header className="hero">
-        <div className="hero-row">
-          <h1>MCD<span className="red">+</span>STUDIO</h1>
-          <div className="hero-cta">
-            <button className="btn primary" onClick={() => setShowLots(true)}>+ Modèles (6)</button>
-            <button className="btn" onClick={() => openExport("sql")}>Exporter ↗</button>
-            <button className="btn" onClick={() => setFocusMode(true)} title="Agrandir la zone de travail (M)">⤢ Plein écran</button>
-          </div>
-        </div>
-        <div className="hero-sub">
-          <p>Colle ton <b>Prisma · Drizzle · SQL</b>, génère le diagramme. <em>Dessiné comme une affiche.</em></p>
-          <span className="rule" />
-          <span className="plus">+</span>
-          <p style={{ maxWidth: 300 }}>Charge un modèle de base, ajoute-en un second, puis <b>relie les entités</b> avec leurs <b>cardinalités MCD</b>.</p>
-        </div>
-      </header>
-      )}
-
-      {!focusMode && (
-      <div className="statbar">
-        <div className="cell"><b>{model.tables.length}</b> TABLES</div>
-        <div className="cell"><b className="red">{model.relations.length}</b> LIENS</div>
-        <div className="cell"><b>{totalFields}</b> CHAMPS</div>
-        <div className="cell"><b className={lots.length ? "red" : ""}>{lots.length}</b> LOTS</div>
-        <div className="cell">{issues.length ? <><b className="red">! {issues.length}</b> DIAG</> : <>✓ DIAG OK</>}</div>
-        <div className="cell exp-cell" id="tour-export">
-          <button className="exp-btn" onClick={() => openExport("sql")} title="Exporter tout en SQL">SQL</button>
-          <button className="exp-btn" onClick={() => openExport("prisma")} title="Exporter tout en Prisma">PRISMA</button>
-          <button className="exp-btn" onClick={() => openExport("drizzle")} title="Exporter tout en Drizzle">DRIZZLE</button>
-        </div>
-        <div className="cell spacer" />
-        <input className="search" placeholder="Rechercher table / champ…" value={query} onChange={(e) => setQuery(e.target.value)} />
-        {savedAt && <div className="cell">✓ {savedAt}</div>}
-      </div>
       )}
 
       <div className="layout">
@@ -1086,7 +1016,7 @@ export default function App() {
             {slots.map((slot, i) => {
               const kind = detectKind(slot.source);
               return (
-                <div key={slot.id} className={`slot ${slot.collapsed ? "folded" : ""}`}>
+                <div key={slot.id} className={`slot ${slot.collapsed ? "folded" : ""} ${slot.hidden ? "masked" : ""}`}>
                   <div className="slot-head" onClick={() => updateSlot(slot.id, { collapsed: !slot.collapsed })} title="Plier / déplier">
                     <span className="slot-fold">{slot.collapsed ? "▸" : "▾"}</span>
                     <input
@@ -1094,7 +1024,17 @@ export default function App() {
                       onClick={(e) => e.stopPropagation()}
                       onChange={(e) => updateSlot(slot.id, { name: e.target.value })}
                     />
+                    {(slotTableCount.get(slot.id) ?? 0) > 0 && (
+                      <span className="slot-count" title="Tables de ce modèle sur le canvas">{slotTableCount.get(slot.id)}</span>
+                    )}
                     <span className={`badge ${kind}`}>{kindBadge[kind] ?? kind}</span>
+                    <button
+                      className="icon-btn"
+                      onClick={(e) => { e.stopPropagation(); updateSlot(slot.id, { hidden: !slot.hidden }); }}
+                      title={slot.hidden ? "Afficher ce modèle sur le canvas" : "Masquer ce modèle du canvas"}
+                    >
+                      {slot.hidden ? "Voir" : "Masquer"}
+                    </button>
                     <button className="icon-btn danger" onClick={(e) => { e.stopPropagation(); deleteSlot(slot.id); }} title="Retirer ce modèle du panneau">✕</button>
                   </div>
                   {!slot.collapsed && (
@@ -1106,7 +1046,7 @@ export default function App() {
                         spellCheck={false}
                       />
                       <div className="row">
-                        <button className="btn small primary full" onClick={() => mergeImportSlot(slot)} title="Garde les modèles déjà sur la grille et ajoute celui-ci dans un lot à son nom">
+                        <button className="btn small primary full" onClick={() => mergeImportSlot(slot)} title="Garde les modèles déjà sur la grille et ajoute celui-ci à la suite">
                           ＋ Ajouter {i === 0 ? "" : `#${i + 1}`} ↗
                         </button>
                       </div>
@@ -1132,60 +1072,7 @@ export default function App() {
 
             <h4>Modèles de base — 0X /</h4>
             <div className="row">
-              <button className="btn small primary" onClick={() => setShowLots(true)}>+ Voir les 6 modèles ↗</button>
-            </div>
-
-            <h4>Mes lots ({lots.length}) +</h4>
-            <p className="muted" style={{ margin: 0 }}>Chaque import ajouté crée son lot. Plusieurs modèles cohabitent sur la même grille.</p>
-            <div className="row">
-              <input
-                placeholder="Nom du lot… (ex : boutique, blog)"
-                value={newLotName}
-                onChange={(e) => setNewLotName(e.target.value)}
-                onKeyDown={(e) => { if (e.key === "Enter") createLot(newLotName); }}
-                style={{ flex: 1, minWidth: 0 }}
-              />
-              <button className="btn small primary" onClick={() => createLot(newLotName)}>+ Créer</button>
-            </div>
-            <div className="mylots" id="tour-lots">
-              {lots.length === 0 && <p className="muted">Aucun lot. Ajoute un import ou crée un lot puis assigne-lui des tables.</p>}
-              {lots.map((lot) => (
-                <div key={lot.id} className={`mylot ${lot.hidden ? "hidden" : ""}`}>
-                  <div className="mylot-head">
-                    <span className="lot-dot" style={{ background: lot.color }} />
-                    <input className="mylot-name" value={lot.name} onChange={(e) => renameLot(lot.id, e.target.value)} />
-                    <span className="mylot-count">{lot.tableIds.length}</span>
-                    <button className="icon-btn" onClick={() => toggleLotHidden(lot.id)} title={lot.hidden ? "Afficher le lot" : "Masquer le lot"}>
-                      {lot.hidden ? "Voir" : "Masquer"}
-                    </button>
-                  </div>
-                  <div className="mylot-tables">
-                    {lot.tableIds.length === 0 && <span className="muted">— vide —</span>}
-                    {lot.tableIds.map((id) => {
-                      const t = model.tables.find((x) => x.id === id);
-                      if (!t) return null;
-                      return (
-                        <span key={id} className="mylot-chip" onClick={() => centerOn(t)} title="Centrer">
-                          {t.name}
-                          <button className="icon-btn" onClick={(e) => { e.stopPropagation(); setTableLot(id, null); }} title="Retirer du lot">✕</button>
-                        </span>
-                      );
-                    })}
-                  </div>
-                  <div className="mylot-actions">
-                    <button className="btn small" disabled={!selected} onClick={() => selected && setTableLot(selected.id, lot.id)} title="Ajouter la table sélectionnée à ce lot">
-                      + table sélect.
-                    </button>
-                    <span className="exp-group" title="Exporter ce lot seul">
-                      <button className="btn small" onClick={() => openExport("sql", lot.id)}>SQL</button>
-                      <button className="btn small" onClick={() => openExport("prisma", lot.id)}>Prisma</button>
-                      <button className="btn small" onClick={() => openExport("drizzle", lot.id)}>Drizzle</button>
-                    </span>
-                    <button className="icon-btn danger" onClick={() => { if (confirm(`Supprimer le lot « ${lot.name} » et SES ${lot.tableIds.length} TABLES ?`)) deleteLot(lot.id, true); }} title="Supprimer le lot ET ses tables">⌫</button>
-                    <button className="icon-btn" onClick={() => deleteLot(lot.id, false)} title="Dissoudre le lot (garde les tables)">✕ lot</button>
-                  </div>
-                </div>
-              ))}
+              <button className="btn small primary full" onClick={() => setShowGallery(true)}>+ Voir les 6 modèles ↗</button>
             </div>
 
             <h4>Diagnostic +</h4>
@@ -1247,23 +1134,13 @@ export default function App() {
             {!focusMode && (
               <>
                 <button className="btn small" onClick={autoLayout}>▦ Auto-layout</button>
-                <span className="sep" />
-                <button className="btn small" onClick={undo} disabled={!hist.length}>↩ Undo</button>
-                <button className="btn small" onClick={redo} disabled={!future.length}>↪ Redo</button>
                 <button className="btn small danger" onClick={newDiagram} title="Tout effacer">⌫</button>
-                <span className="sep" />
-                <button className={showLeft ? "btn small active" : "btn small"} onClick={() => setShowLeft(!showLeft)}>
-                  {showLeft ? "⟨ Import" : "Import ⟩"}
-                </button>
-                <button className={showRight ? "btn small active" : "btn small"} onClick={() => setShowRight(!showRight)}>
-                  {showRight ? "Édition ⟩" : "⟨ Édition"}
-                </button>
               </>
             )}
             {focusMode && (
               <>
                 <span className="sep" />
-                <button className="btn small" onClick={() => setShowLots(true)}>+ Modèles</button>
+                <button className="btn small" onClick={() => setShowGallery(true)}>+ Modèles</button>
                 <button className="btn small" onClick={() => openExport("sql")}>Exporter ↗</button>
                 <button className="btn small" onClick={() => { setFocusMode(false); setShowLeft(true); setShowRight(true); }}>⟨ Panneaux [Esc]</button>
               </>
@@ -1287,7 +1164,7 @@ export default function App() {
             <div className="canvas-bgword">SCHEMA<span>+</span></div>
             <div ref={worldRef} className="world" style={{ transform: `translate(${cam.x}px, ${cam.y}px) scale(${cam.z})` }}>
               <svg className="edges" style={{ overflow: "visible" }}>
-                {visibleRelations.map((r) => {
+                {model.relations.map((r) => {
                   const a = byName.get(r.fromTable);
                   const b = byName.get(r.toTable);
                   if (!a || !b) return null;
@@ -1315,7 +1192,7 @@ export default function App() {
                   <h2>Canvas <span>vide+</span></h2>
                   <p>Colle un schema puis <em>« Générer le MCD »</em>, ou démarre d'un modèle de base tout relié.</p>
                   <div className="row">
-                    <button className="btn primary" onClick={() => setShowLots(true)}>+ Choisir un modèle</button>
+                    <button className="btn primary" onClick={() => setShowGallery(true)}>+ Choisir un modèle</button>
                     <button className="btn" onClick={addTable}>＋ Table vide</button>
                   </div>
                 </div>
@@ -1324,7 +1201,6 @@ export default function App() {
               {visibleTables.map((t) => {
                 const dim = !!q && !matchTable(t);
                 const hit = !!q && matchTable(t);
-                const lot = lotOfTable.get(t.id);
                 return (
                   <div key={t.id}
                     className={`table-card ${selectedId === t.id ? "selected" : ""} ${dim ? "dim" : ""} ${hit && q ? "hit" : ""} ${linkMode ? "linkable" : ""} ${linkFromId === t.id ? "link-from" : ""} ${linkMode && linkHoverId === t.id && linkFromId !== t.id ? "link-hover" : ""}`}
@@ -1340,7 +1216,6 @@ export default function App() {
                     onMouseLeave={() => { if (linkMode) setLinkHoverId((h) => (h === t.id ? null : h)); }}
                   >
                     <div className="card-head">
-                      {lot && <span className="lot-dot" style={{ background: lot.color }} title={`Lot : ${lot.name}`} />}
                       <span className="card-title">{t.name}</span>
                       <span className="card-count">{t.fields.length}</span>
                     </div>
@@ -1371,10 +1246,6 @@ export default function App() {
               {visibleTables.filter(matchTable).slice(0, 6).map((t) => (
                 <button key={t.id} className="btn small" onClick={() => centerOn(t)}>{t.name}</button>
               ))}
-              <button className="btn small primary" onClick={() => {
-                const ids = visibleTables.filter(matchTable).map((t) => t.id);
-                createLot(query.trim(), ids);
-              }}>＋ Lot depuis recherche</button>
               <button className="btn small danger" onClick={() => setQuery("")}>✕</button>
             </div>
           )}
@@ -1391,7 +1262,7 @@ export default function App() {
                 <button className="btn full" onClick={addTable}>＋ Ajouter une table</button>
                 <h4>Relations ({model.relations.length})</h4>
                 <div className="rellist">
-                  {model.relations.map((r) => {
+                {visibleRelations.map((r) => {
                     const { a, b } = mcdCards(r);
                     return (
                       <div key={r.id} className="rel mcd">
@@ -1427,14 +1298,6 @@ export default function App() {
                 </div>
                 <label className="lbl">Nom de la table</label>
                 <input value={selected.name} onChange={(e) => renameTable(selected.id, e.target.value)} />
-                <label className="lbl">Lot</label>
-                <select
-                  value={lotOfTable.get(selected.id)?.id ?? ""}
-                  onChange={(e) => setTableLot(selected.id, e.target.value || null)}
-                >
-                  <option value="">— aucun lot —</option>
-                  {lots.map((l) => <option key={l.id} value={l.id}>{l.name} ({l.tableIds.length})</option>)}
-                </select>
                 <div className="row">
                   <button className="btn small" onClick={() => addField(selected.id)}>＋ Champ</button>
                   <button className="btn small" onClick={() => duplicateTable(selected.id)}>Dupliquer</button>
@@ -1497,10 +1360,12 @@ export default function App() {
       </div>
 
       {!focusMode && (
-      <div className="footer-note">
-        <span>O tur по Японии — non : MCD°STUDIO — About / Lots / Import / Export</span>
-        <span>+ Relie les entités à la main : cardinalités 0,1 / 1,1 / 0,N / 1,N +</span>
-        <span>TG : @mcd_studio — Ticket 001/006</span>
+      <div className="statusbar">
+        <span className="status-msg">{parseMsg || "Prêt — ajoute un modèle, relie ses entités, exporte."}</span>
+        <span style={{ flex: 1 }} />
+        {selected && <span className="status-sel">▸ {selected.name} · {selected.fields.length} champs</span>}
+        <span>⤢ {Math.round(cam.z * 100)}%</span>
+        {savedAt && <span>✓ {savedAt}</span>}
       </div>
       )}
 
@@ -1535,10 +1400,10 @@ export default function App() {
       )}
 
       {exportView && (
-        <div className="modal-bg" onClick={() => { setExportView(null); setExportLotId(null); }}>
+        <div className="modal-bg" onClick={() => setExportView(null)}>
           <div className="modal" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-head"><strong>EXPORT <span>{exportLot ? exportLot.name.toUpperCase().slice(0, 18) : "CANVAS"}</span></strong>
-              <button className="icon-btn" onClick={() => { setExportView(null); setExportLotId(null); }}>✕ FERMER</button>
+            <div className="modal-head"><strong>EXPORT <span>CANVAS</span></strong>
+              <button className="icon-btn" onClick={() => setExportView(null)}>✕ FERMER</button>
             </div>
             <div className="exp-tabs">
               {(["sql", "prisma", "drizzle", "json"] as const).map((v) => (
@@ -1547,9 +1412,9 @@ export default function App() {
                 </button>
               ))}
               <span className="exp-scope">
-                {exportLot
-                  ? <>lot « {exportLot.name} » · {exportModel.tables.length} tables <button className="icon-btn" onClick={() => setExportLotId(null)} title="Exporter tout le canvas">tout ✕</button></>
-                  : <>tout le canvas · {exportModel.tables.length} tables{ lots.length > 0 && <> · <span className="muted">ou exporte un lot depuis « Mes lots »</span></>}</>}
+                {exportView === "json"
+                  ? <>sauvegarde complète · {model.tables.length} tables (modèles masqués inclus)</>
+                  : <>{visibleTables.length} table(s) visible(s) · {visibleRelations.length} lien(s) — masque un modèle pour l'exclure</>}
               </span>
             </div>
             <pre>{exportText}</pre>
@@ -1565,13 +1430,13 @@ export default function App() {
         </div>
       )}
 
-      {showLots && (
-        <div className="modal-bg" onClick={() => setShowLots(false)}>
+      {showGallery && (
+        <div className="modal-bg" onClick={() => setShowGallery(false)}>
           <div className="modal wide" onClick={(e) => e.stopPropagation()}>
             <div className="modal-head">
               <strong>MODÈLES <span>DE BASE+</span></strong>
-              <span className="muted">01—06 · AJOUTER = canvas + lot + panneau gauche · relie à la main ensuite</span>
-              <button className="icon-btn" onClick={() => setShowLots(false)}>✕ FERMER</button>
+              <span className="muted">01—06 · AJOUTER = canvas + panneau gauche · relie à la main ensuite</span>
+              <button className="icon-btn" onClick={() => setShowGallery(false)}>✕ FERMER</button>
             </div>
             <div className="lots-grid">
               <div className="lot-card custom">
@@ -1591,17 +1456,17 @@ export default function App() {
                   <button className="go" disabled={!customSource.trim()} onClick={addCustomSlot}>+ Ajouter au panneau ↗</button>
                 </div>
               </div>
-              {LOTS.map((lot) => {
-                const parsed = parseAuto(lot.sql).model;
+              {STARTERS.map((pack) => {
+                const parsed = parseAuto(pack.sql).model;
                 return (
-                  <div key={lot.id} className="lot-card">
-                    <div className="lot-top"><b>{lot.numero} / 06</b><span>{parsed.tables.length} TABLES · {parsed.relations.length} LIENS</span></div>
-                    <h3>{lot.titre}</h3>
-                    <div className="tagline">+ {lot.tagline}</div>
-                    <p className="desc">{lot.description}</p>
+                  <div key={pack.id} className="lot-card">
+                    <div className="lot-top"><b>{pack.numero} / 06</b><span>{parsed.tables.length} TABLES · {parsed.relations.length} LIENS</span></div>
+                    <h3>{pack.titre}</h3>
+                    <div className="tagline">+ {pack.tagline}</div>
+                    <p className="desc">{pack.description}</p>
                     <div className="tables">{parsed.tables.map((t) => t.name).join(" · ")}</div>
                     <div className="lot-actions">
-                      <button className="go" onClick={() => loadLot(lot)}>+ Ajouter ↗</button>
+                      <button className="go" onClick={() => loadStarter(pack)}>+ Ajouter ↗</button>
                     </div>
                   </div>
                 );
@@ -1611,7 +1476,7 @@ export default function App() {
             <div className="row">
               <span className="muted">Après l'ajout : sélectionne 2 entités sur le canvas et définis leurs cardinalités MCD.</span>
               <span style={{ flex: 1 }} />
-              <button className="btn primary" onClick={() => setShowLots(false)}>Retour au canvas ↗</button>
+              <button className="btn primary" onClick={() => setShowGallery(false)}>Retour au canvas ↗</button>
             </div>
           </div>
         </div>

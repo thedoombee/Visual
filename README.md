@@ -6,7 +6,7 @@
 > puis exportez en **SQL**, **Prisma**, **Drizzle**, **SVG**, **PNG** ou **JSON**.
 
 Application 100 % locale (aucun serveur, aucune donnée envoyée sur le réseau) —
-diagramme, modèles importés et lots sauvegardés automatiquement dans le navigateur.
+diagramme et modèles importés sauvegardés automatiquement dans le navigateur.
 
 Style : brutalisme éditorial papier/encre/rouge (titre géant, tickets perforés,
 mono condensé).
@@ -19,7 +19,6 @@ mono condensé).
 - [Démarrage rapide](#démarrage-rapide)
 - [Utilisation](#utilisation)
   - [Modèles importés (panneau gauche)](#modèles-importés-panneau-gauche)
-  - [Lots : plusieurs modèles sur la grille](#lots--plusieurs-modèles-sur-la-grille)
   - [Relier les entités (formulaire + canvas)](#relier-les-entités-formulaire--canvas)
   - [Cardinalités MCD](#cardinalités-mcd)
   - [Naviguer sur la grille](#naviguer-sur-la-grille)
@@ -41,19 +40,20 @@ mono condensé).
 
 | Catégorie | Détails |
 |---|---|
-| **Modèles importés (illimités)** | Panneau gauche = liste de modèles. Chacun a son nom, son texte, son badge auto (`PRISMA` / `DRIZZLE` / `SQL`), se **plie / déplie** au clic, accepte les exemples et les fichiers (`.sql`, `.prisma`, `.ts`, `.txt` — le nom du fichier renomme le modèle). Liste persistée en local. |
-| **Ajout multi-modèles** | Chaque modèle propose **＋ Ajouter** (ajoute ses tables à droite du canvas sans jamais rien effacer, renommage auto `users → users_2`, lot créé à son nom). |
-| **Lots utilisateur** | Regroupements nommés et colorés (1 table = 1 lot max). Création manuelle, depuis les résultats de recherche, ou auto à chaque ajout. Chaque lot : renommage en ligne, compteur, **œil pour masquer/afficher** tout le lot (les liens suivent), chips des tables (clic = centrer), ajout de la table sélectionnée, **export SQL / Prisma / Drizzle du lot seul**, dissolution ou suppression lot + tables. |
+| **Modèles importés (illimités)** | Panneau gauche = liste de modèles. Chacun a son nom, son texte, son badge auto (`PRISMA` / `DRIZZLE` / `SQL`), son compteur de tables, se **plie / déplie** au clic, se **masque / affiche** sur le canvas via le bouton `Masquer / Voir`, accepte les exemples et les fichiers (`.sql`, `.prisma`, `.ts`, `.txt` — le nom du fichier renomme le modèle). Liste persistée en local. |
+| **Ajout multi-modèles** | Chaque modèle propose **＋ Ajouter** (ajoute ses tables à droite du canvas sans jamais rien effacer, renommage auto `users → users_2`). |
 | **Liaisons entité → entité** | Deux façons : formulaire **« Relier 2 entités »** (entité source → entité cible, champs pré-remplis : le `xxx_id` qui vise la cible + la PK en face) ou **mode ⇄ Relier sur le canvas** (clic source → clic cible, enchaînable, `Echap` pour quitter). Le champ source devient `FK` automatiquement. |
 | **Cardinalités MCD bilatérales** | Chaque lien porte **deux cardinalités** (`0,1 / 1,1 / 0,N / 1,N`), une collée à chaque entité sur le canvas (point noir = source, point rouge = cible), modifiables séparément dans les listes de relations. Anciens liens `N:1` migrés auto (`1,N — 1,1`). Reprises à l'export SVG/PNG. |
-| **Canvas infini** | Cartes déplaçables, pan par glisser du fond, **zoom molette libre (20 %–250 %) centré sur le curseur** (pinch trackpad adouci), slider + boutons `−` / `＋`, pastille `%` (clic = 100 %), `Cadrer [F]`, `Recentrer`. **⤢ Plein écran [M]** : masque tout (hero, panneaux, barres) pour travailler sur toute la fenêtre. |
-| **Édition complète** | Renommer tables (relations suivies) et champs, types avec suggestions, cases `PK / FK / UQ / NULL`, ajouter / dupliquer / supprimer tables et champs, assigner une table à un lot depuis sa fiche, **annuler / rétablir** (`Ctrl+Z / Ctrl+Y`, historique 50 pas). |
-| **Recherche** | Champ dans la barre de stats : les tables non concordantes se grisent, pastilles de résultats (clic = centrer, double-clic sur carte aussi), bouton **＋ Lot depuis recherche**. |
+| **Canvas infini** | Cartes déplaçables, pan par glisser du fond, **zoom molette libre (20 %–250 %) centré sur le curseur** (pinch trackpad adouci), slider + boutons `−` / `＋`, pastille `%` (clic = 100 %), `Cadrer [F]`, `Recentrer`. **⤢ Plein écran [M]** : masque tout (barre de commande, panneaux) pour travailler sur toute la fenêtre. |
+| **Barre de commande** | Une seule barre fine en haut : marque, compteurs (tables · liens · champs · diagnostic avec détail au survol), recherche globale, exports SQL / PRISMA / DRIZZLE / JSON, annuler / rétablir, galerie de modèles, panneaux, plein écran, heure de sauvegarde. |
+| **Barre de statut** | En bas : dernier message d’action, table sélectionnée, niveau de zoom, heure de sauvegarde. Rien de décoratif, que du contexte utile. |
+| **Édition complète** | Renommer tables (relations suivies) et champs, types avec suggestions, cases `PK / FK / UQ / NULL`, ajouter / dupliquer / supprimer tables et champs, **annuler / rétablir** (`Ctrl+Z / Ctrl+Y`, historique 50 pas). |
+| **Recherche** | Champ dans la barre de commande : les tables non concordantes se grisent, pastilles de résultats (clic = centrer, double-clic sur carte aussi). |
 | **Diagnostic** | Alertes `ERR / WARN` : table sans `PRIMARY KEY`, table isolée, lien orphelin, champ manquant. Compteur dans la barre de stats. |
-| **Exports** | Modale à **onglets SQL / Prisma (.prisma) / Drizzle (.ts) / JSON**, portée **canvas entier ou lot seul**, nom de fichier adapté, **Copier** + **⤓ Télécharger**, plus **SVG** vectoriel et **PNG** aux couleurs du thème. Boutons rapides SQL / PRISMA / DRIZZLE dans la barre de stats. |
-| **Modèles de base** | Galerie de 6 modèles prêts (`BLOG / E-COMMERCE / SAAS-AUTH / SOCIAL / ÉCOLE / IMMO`) : **+ Ajouter ↗** (canvas + lot + panneau gauche, jamais de remplacement). Carte noire **Modèle perso** : collez votre schema dans la galerie, il atterrit comme vrai modèle dans le panneau gauche. |
-| **Sauvegarde auto** | Modèle + lots + modèles importés persistés (`localStorage`), heure affichée (`✓ 12:03:11`). Import / export JSON pour partager ou versionner. |
-| **Visite guidée** | Au tout premier lancement (aucune donnée en `localStorage`), 5 mini-fenêtres présentent : modèles, liaison ⇄, lots, exports. Rejouable via **? Visite** dans l'aide du panneau gauche. |
+| **Exports** | Modale à **onglets SQL / Prisma (.prisma) / Drizzle (.ts) / JSON**, portée **canvas entier**, nom de fichier adapté, **Copier** + **⤓ Télécharger**, plus **SVG** vectoriel et **PNG** aux couleurs du thème. Boutons rapides SQL / PRISMA / DRIZZLE dans la barre de stats. |
+| **Modèles de base** | Galerie de 6 modèles prêts (`BLOG / E-COMMERCE / SAAS-AUTH / SOCIAL / ÉCOLE / IMMO`) : **+ Ajouter ↗** (canvas + panneau gauche, jamais de remplacement). Carte noire **Modèle perso** : collez votre schema dans la galerie, il atterrit comme vrai modèle dans le panneau gauche. |
+| **Sauvegarde auto** | Modèle + modèles importés persistés (`localStorage`), heure affichée (`✓ 12:03:11`). Import / export JSON pour partager ou versionner. |
+| **Visite guidée** | Au tout premier lancement (aucune donnée en `localStorage`), 4 mini-fenêtres présentent : modèles, liaison ⇄, exports. Rejouable via **? Visite** dans l'aide du panneau gauche. |
 
 ---
 
@@ -89,20 +89,12 @@ En-tête **01 / Modèles importés (N)** + bouton **+ Modèle** (les modèles
 ouverts se plient automatiquement quand vous en ajoutez un).
 
 Chaque modèle = un bandeau (clic = **plier / déplier**), nom éditable, badge
-de format détecté, croix pour le retirer du panneau. Déplié : textarea +
+de format détecté, compteur de tables sur le canvas, bouton **Masquer / Voir**
+pour afficher ou cacher tout le modèle sur la grille (recherche, cadrage et
+exports suivent — sauf le JSON, sauvegarde complète), croix pour le retirer du
+panneau (ses tables restent, visibles). Déplié : textarea +
 **＋ Ajouter ↗** + message de résultat + exemples
 (`Prisma / Drizzle / SQL / Fichier…`).
-
-### Lots : plusieurs modèles sur la grille
-
-Section **Mes lots (N)** sous les modèles : chaque ajout y crée un lot au nom
-du modèle. Vous pouvez aussi créer un lot vide (`+ Créer`), y ajouter la table
-sélectionnée (`+ table sélect.`), changer son lot depuis la fiche d'une table,
-ou le générer depuis une recherche.
-
-Le bouton `Voir / Masquer` affiche ou masque un lot entier (cartes + liens). `⌫` supprime lot **et**
-tables (confirmation), `✕ lot` dissout le lot en gardant les tables. La pastille
-couleur du lot apparaît dans l'en-tête de chaque carte.
 
 ### Relier les entités (formulaire + canvas)
 
@@ -142,7 +134,6 @@ défaut (côté FK / côté PK).
 
 Champ dans la barre de stats : filtre sur noms de tables, champs et types.
 Cartes non concordantes grisées, pastilles de résultats cliquables,
-double-clic sur une carte = centrer, **＋ Lot depuis recherche** = grouper les
 résultats en un clic.
 
 ### Diagnostic
@@ -153,8 +144,8 @@ isolées, liens/champs orphelins.
 ### Exporter
 
 Modale d'export : onglets **SQL / Prisma / Drizzle / JSON**, portée **canvas
-entier ou lot seul** (depuis les boutons `SQL / Prisma / Drizzle` d'un lot, ou
-retour à « tout » via `tout ✕`), nom de fichier adapté (`boutique.prisma`…),
+Modale d'export : onglets **SQL / Prisma / Drizzle / JSON** sur tout le canvas,
+nom de fichier adapté (`mcd.sql`, `schema.prisma`…), **Copier**, **⤓ Télécharger**, **PNG**, **SVG**.
 **Copier**, **⤓ Télécharger**, **PNG**, **SVG**.
 
 | Format | Contenu |
@@ -162,15 +153,15 @@ retour à « tout » via `tout ✕`), nom de fichier adapté (`boutique.prisma`�
 | `SQL` | `CREATE TABLE` avec `PRIMARY KEY`, `NOT NULL`, `UNIQUE`, `FOREIGN KEY`. |
 | `Prisma` | Blocs `model` avec `@id`, `@unique`, `@default`, `@map` / `@@map`, `@relation`. |
 | `Drizzle` | `pgTable("…", { … })` avec `.primaryKey()`, `.notNull()`, `.unique()`, `.references(…)`. |
-| `JSON` | Modèle interne complet (tables + relations + lots) — à réimporter via **Importer JSON…**. |
+| `JSON` | Modèle interne complet (tables + relations) — à réimporter via **Importer JSON…**. |
 | `SVG` / `PNG` | Image du diagramme (relations + cardinalités MCD incluses). |
 
 ### Modèles de base + modèle perso
 
-Bouton **+ Modèles (6)** (hero) / **Modèles +** (micro-nav) / **+ Voir les 6
+Bouton **+ Modèles** (barre de commande) / **+ Voir les 6
 modèles** (panneau) : `BLOG / CMS`, `E-COMMERCE`, `SAAS / AUTH`, `RÉSEAU
 SOCIAL`, `ÉCOLE`, `IMMO / RENDEZ-VOUS`. Chacun : **+ Ajouter ↗** — il
-rejoint le canvas (à droite, sans rien effacer), un lot à son nom **et** un
+rejoint le canvas (à droite, sans rien effacer) **et** un
 modèle du panneau gauche. La carte noire **Modèle perso** envoie votre propre schema
 dans le panneau gauche comme un vrai modèle importé.
 
@@ -241,13 +232,13 @@ CREATE TABLE "posts" (
 ├── vite.config.ts        # Config Vite + plugin React
 └── src/
     ├── main.tsx          # Bootstrap React
-    ├── App.tsx           # Toute l'UI : slots, lots, canvas, liaisons, exports
-    ├── types.ts          # DBTable, DBField, DBRelation (+fromCard/toCard, mcdCards), DBLot, DBModel
+    ├── App.tsx           # Toute l'UI : slots, canvas, liaisons, exports
+    ├── types.ts          # DBTable, DBField, DBRelation (+fromCard/toCard, mcdCards), DBModel
     ├── parsers.ts        # Détection + parseurs Prisma / Drizzle / SQL
     ├── generators.ts     # Générateurs SQL / Prisma / Drizzle
     ├── examples.ts       # Exemples prêts à coller (Prisma, Drizzle, SQL)
-    ├── templates.ts      # 6 modèles de base (lots SQL prêts à ajouter)
-    └── index.css         # Thème brutaliste papier/encre/rouge (tickets, hero géant, dot-grid)
+    ├── templates.ts      # 6 modèles de base (packs SQL prêts à ajouter)
+    └── index.css         # Thème brutaliste papier/encre/rouge (tickets, barre de commande, dot-grid)
 ```
 
 **Choix techniques :** React 19 + TypeScript + Vite, zéro dépendance runtime hors
@@ -268,7 +259,7 @@ React (canvas SVG maison, parsing par regex, pas de backend).
 
 ## Persistance des données
 
-- Modèle (tables + relations + **lots**) : `localStorage`, clé **`mcd-studio-v2`**
+- Modèle (tables + relations) : `localStorage`, clé **`mcd-studio-v2`**
   (reprend `mcd-studio-v1` si présente), debounce ~400 ms, heure affichée.
 - Modèles importés du panneau gauche (textes + plié/déplié) : clé
   **`mcd-studio-slots-v1`**.
@@ -283,8 +274,7 @@ React (canvas SVG maison, parsing par regex, pas de backend).
 - Les relations complexes (`@@id` / `@@unique` composites Prisma, `N:N`
   implicites) sont représentées de façon simplifiée.
 - Enums Prisma et contraintes `CHECK` SQL non importés.
-- Pas de mini-carte de navigation ; pas de déplacement d'un lot entier d'un
-  seul geste ; pas de liaison par glisser-déposer (clic-clic uniquement).
+- Pas de mini-carte de navigation ; pas de liaison par glisser-déposer (clic-clic uniquement).
 - Pistes : liaisons `N:N` avec table de jointure auto, export Mermaid / DBML,
   mode présentation, collaboration temps réel.
 

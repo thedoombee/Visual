@@ -14,6 +14,9 @@ export interface DBTable {
   x: number;
   y: number;
   fields: DBField[];
+  // Modèle d'origine (slot du panneau gauche) : sert à masquer/afficher
+  // un modèle entier. Absent = table manuelle, toujours visible.
+  slotId?: string;
 }
 
 export interface DBRelation {
@@ -43,24 +46,10 @@ export function mcdCards(r: Pick<DBRelation, "fromCard" | "toCard" | "cardinalit
   }
 }
 
-// Lot = regroupement nommé de tables créé par l'utilisateur.
-// Permet de faire cohabiter plusieurs modèles importés sur la même grille :
-// visibilité par lot, export par lot, assignation table ↔ lot (1 lot max par table).
-export interface DBLot {
-  id: string;
-  name: string;
-  color: string;
-  tableIds: string[];
-  hidden?: boolean;
-}
-
 export interface DBModel {
   tables: DBTable[];
   relations: DBRelation[];
-  lots?: DBLot[];
 }
-
-export const LOT_COLORS = ["#FF2B1D", "#111111", "#0A6CFF", "#0E9F6E", "#B7791F", "#7C3AED"];
 
 export const uid = (p = "id") =>
   `${p}_${Math.random().toString(36).slice(2, 8)}`;
