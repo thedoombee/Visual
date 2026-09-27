@@ -42,18 +42,18 @@ mono condensé).
 | Catégorie | Détails |
 |---|---|
 | **Modèles importés (illimités)** | Panneau gauche = liste de modèles. Chacun a son nom, son texte, son badge auto (`PRISMA` / `DRIZZLE` / `SQL`), se **plie / déplie** au clic, accepte les exemples et les fichiers (`.sql`, `.prisma`, `.ts`, `.txt` — le nom du fichier renomme le modèle). Liste persistée en local. |
-| **Ajout multi-modèles** | Chaque modèle propose **＋ Ajouter** (ajoute ses tables à droite du canvas sans effacer les autres, renommage auto `users → users_2`, lot créé à son nom) ou **Remplacer** (reset du canvas avec ce modèle). |
+| **Ajout multi-modèles** | Chaque modèle propose **＋ Ajouter** (ajoute ses tables à droite du canvas sans jamais rien effacer, renommage auto `users → users_2`, lot créé à son nom). |
 | **Lots utilisateur** | Regroupements nommés et colorés (1 table = 1 lot max). Création manuelle, depuis les résultats de recherche, ou auto à chaque ajout. Chaque lot : renommage en ligne, compteur, **œil pour masquer/afficher** tout le lot (les liens suivent), chips des tables (clic = centrer), ajout de la table sélectionnée, **export SQL / Prisma / Drizzle du lot seul**, dissolution ou suppression lot + tables. |
-| **Liaisons entité → entité** | Deux façons : formulaire **« Relier 2 entités »** (entité source → entité cible, champs pré-remplis : le `xxx_id` qui vise la cible + la PK en face) ou **mode 🔗 Relier sur le canvas** (clic source → clic cible, enchaînable, `Echap` pour quitter). Le champ source devient `FK` automatiquement. |
+| **Liaisons entité → entité** | Deux façons : formulaire **« Relier 2 entités »** (entité source → entité cible, champs pré-remplis : le `xxx_id` qui vise la cible + la PK en face) ou **mode ⇄ Relier sur le canvas** (clic source → clic cible, enchaînable, `Echap` pour quitter). Le champ source devient `FK` automatiquement. |
 | **Cardinalités MCD bilatérales** | Chaque lien porte **deux cardinalités** (`0,1 / 1,1 / 0,N / 1,N`), une collée à chaque entité sur le canvas (point noir = source, point rouge = cible), modifiables séparément dans les listes de relations. Anciens liens `N:1` migrés auto (`1,N — 1,1`). Reprises à l'export SVG/PNG. |
-| **Canvas infini** | Cartes déplaçables, pan par glisser du fond, **zoom molette libre (20 %–250 %) centré sur le curseur** (pinch trackpad adouci), slider + boutons `−` / `＋`, pastille `%` (clic = 100 %), `Cadrer [F]`, `Recentrer`. **⛶ Plein écran [M]** : masque tout (hero, panneaux, barres) pour travailler sur toute la fenêtre. |
+| **Canvas infini** | Cartes déplaçables, pan par glisser du fond, **zoom molette libre (20 %–250 %) centré sur le curseur** (pinch trackpad adouci), slider + boutons `−` / `＋`, pastille `%` (clic = 100 %), `Cadrer [F]`, `Recentrer`. **⤢ Plein écran [M]** : masque tout (hero, panneaux, barres) pour travailler sur toute la fenêtre. |
 | **Édition complète** | Renommer tables (relations suivies) et champs, types avec suggestions, cases `PK / FK / UQ / NULL`, ajouter / dupliquer / supprimer tables et champs, assigner une table à un lot depuis sa fiche, **annuler / rétablir** (`Ctrl+Z / Ctrl+Y`, historique 50 pas). |
 | **Recherche** | Champ dans la barre de stats : les tables non concordantes se grisent, pastilles de résultats (clic = centrer, double-clic sur carte aussi), bouton **＋ Lot depuis recherche**. |
 | **Diagnostic** | Alertes `ERR / WARN` : table sans `PRIMARY KEY`, table isolée, lien orphelin, champ manquant. Compteur dans la barre de stats. |
-| **Exports** | Modale à **onglets SQL / Prisma (.prisma) / Drizzle (.ts) / JSON**, portée **canvas entier ou lot seul**, nom de fichier adapté, **⧉ Copier** + **⤓ Télécharger**, plus **SVG** vectoriel et **PNG** aux couleurs du thème. Boutons rapides SQL / PRISMA / DRIZZLE dans la barre de stats. |
-| **Modèles de base** | Galerie de 6 modèles prêts (`BLOG / E-COMMERCE / SAAS-AUTH / SOCIAL / ÉCOLE / IMMO`)  : **+ Ajouter** (ajout + lot) ou **Remplacer**. Carte noire **Modèle perso** : collez votre schema dans la galerie, il atterrit comme vrai modèle dans le panneau gauche. |
+| **Exports** | Modale à **onglets SQL / Prisma (.prisma) / Drizzle (.ts) / JSON**, portée **canvas entier ou lot seul**, nom de fichier adapté, **Copier** + **⤓ Télécharger**, plus **SVG** vectoriel et **PNG** aux couleurs du thème. Boutons rapides SQL / PRISMA / DRIZZLE dans la barre de stats. |
+| **Modèles de base** | Galerie de 6 modèles prêts (`BLOG / E-COMMERCE / SAAS-AUTH / SOCIAL / ÉCOLE / IMMO`) : **+ Ajouter ↗** (canvas + lot + panneau gauche, jamais de remplacement). Carte noire **Modèle perso** : collez votre schema dans la galerie, il atterrit comme vrai modèle dans le panneau gauche. |
 | **Sauvegarde auto** | Modèle + lots + modèles importés persistés (`localStorage`), heure affichée (`✓ 12:03:11`). Import / export JSON pour partager ou versionner. |
-| **Visite guidée** | Au tout premier lancement (aucune donnée en `localStorage`), 5 mini-fenêtres présentent : modèles, liaison 🔗, lots, exports. Rejouable via **? Visite** dans l'aide du panneau gauche. |
+| **Visite guidée** | Au tout premier lancement (aucune donnée en `localStorage`), 5 mini-fenêtres présentent : modèles, liaison ⇄, lots, exports. Rejouable via **? Visite** dans l'aide du panneau gauche. |
 
 ---
 
@@ -90,7 +90,7 @@ ouverts se plient automatiquement quand vous en ajoutez un).
 
 Chaque modèle = un bandeau (clic = **plier / déplier**), nom éditable, badge
 de format détecté, croix pour le retirer du panneau. Déplié : textarea +
-**＋ Ajouter ↗** / **Remplacer** + message de résultat + exemples
+**＋ Ajouter ↗** + message de résultat + exemples
 (`Prisma / Drizzle / SQL / Fichier…`).
 
 ### Lots : plusieurs modèles sur la grille
@@ -100,7 +100,7 @@ du modèle. Vous pouvez aussi créer un lot vide (`+ Créer`), y ajouter la tabl
 sélectionnée (`+ table sélect.`), changer son lot depuis la fiche d'une table,
 ou le générer depuis une recherche.
 
-L'œil `◉ / ◌` masque un lot entier (cartes + liens). `⌫` supprime lot **et**
+Le bouton `Voir / Masquer` affiche ou masque un lot entier (cartes + liens). `⌫` supprime lot **et**
 tables (confirmation), `✕ lot` dissout le lot en gardant les tables. La pastille
 couleur du lot apparaît dans l'en-tête de chaque carte.
 
@@ -112,7 +112,7 @@ présélectionnée en source). Choisissez les deux entités : les champs sont
 suggérés (`xxx_id` → PK), ajustez si besoin, réglez les deux cardinalités,
 **Lier (1,N — 1,1) ↗**.
 
-**Canvas** : bouton **🔗 Relier** dans la barre d'outils → clic sur l'entité
+**Canvas** : bouton **⇄ Relier** dans la barre d'outils → clic sur l'entité
 source (bordure rouge) → clic sur l'entité cible → lien créé aussitôt
 (`1,N — 1,1`, champ source marqué `FK`). Le mode reste actif pour enchaîner ;
 re-clic / clic dans le vide = annuler le départ ; `Echap` / **Quitter** = sortir.
@@ -135,7 +135,7 @@ défaut (côté FK / côté PK).
   slider, `−` / `＋`, pastille `%` (= retour 100 %).
 - **Déplacer** : glisser le fond (*pan*), glisser une carte par son en-tête.
 - **Cadrer [F]** : ajuste le zoom pour voir toutes les tables.
-- **⛶ Plein écran [M]** : canvas seul sur tout l'écran (barre d'outils réduite
+- **⤢ Plein écran [M]** : canvas seul sur tout l'écran (barre d'outils réduite
   conservée : zoom, cadrer, modèles, export, retour panneaux).
 
 ### Recherche
@@ -155,7 +155,7 @@ isolées, liens/champs orphelins.
 Modale d'export : onglets **SQL / Prisma / Drizzle / JSON**, portée **canvas
 entier ou lot seul** (depuis les boutons `SQL / Prisma / Drizzle` d'un lot, ou
 retour à « tout » via `tout ✕`), nom de fichier adapté (`boutique.prisma`…),
-**⧉ Copier**, **⤓ Télécharger**, **PNG**, **SVG**.
+**Copier**, **⤓ Télécharger**, **PNG**, **SVG**.
 
 | Format | Contenu |
 |---|---|
@@ -169,8 +169,9 @@ retour à « tout » via `tout ✕`), nom de fichier adapté (`boutique.prisma`�
 
 Bouton **+ Modèles (6)** (hero) / **Modèles +** (micro-nav) / **+ Voir les 6
 modèles** (panneau) : `BLOG / CMS`, `E-COMMERCE`, `SAAS / AUTH`, `RÉSEAU
-SOCIAL`, `ÉCOLE`, `IMMO / RENDEZ-VOUS`. Chacun : **+ Ajouter** (ajout + lot)
-ou **Remplacer ↗**. La carte noire **Modèle perso** envoie votre propre schema
+SOCIAL`, `ÉCOLE`, `IMMO / RENDEZ-VOUS`. Chacun : **+ Ajouter ↗** — il
+rejoint le canvas (à droite, sans rien effacer), un lot à son nom **et** un
+modèle du panneau gauche. La carte noire **Modèle perso** envoie votre propre schema
 dans le panneau gauche comme un vrai modèle importé.
 
 ---
@@ -223,7 +224,7 @@ CREATE TABLE "posts" (
 | `]` | Afficher / masquer le panneau d'édition (droite) |
 | `F` | Cadrer toutes les tables |
 | `M` | Plein écran canvas (activer / quitter) |
-| `Echap` | Quitter le mode 🔗 liaison, sinon quitter le plein écran |
+| `Echap` | Fermer la modale ouverte, sinon quitter le mode ⇄ liaison, sinon quitter le plein écran |
 | `Ctrl+Z` / `Ctrl+Y` (ou `Ctrl+Maj+Z`) | Annuler / rétablir |
 
 > Ignorés pendant la saisie dans un champ, un menu déroulant ou un textarea.
@@ -291,4 +292,4 @@ React (canvas SVG maison, parsing par regex, pas de backend).
 
 ## Licence
 
-Projet personnel — libre d'utilisation et de modification. Amusez-vous bien ! 🎉
+Projet personnel — libre d'utilisation et de modification. Amusez-vous bien !

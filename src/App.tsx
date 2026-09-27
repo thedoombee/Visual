@@ -27,7 +27,7 @@ const TOUR_STEPS: TourStep[] = [
   {
     target: "#tour-link-btn",
     title: "02 · Relie sur la grille",
-    text: "Clique ce bouton 🔗 Relier, puis l'entité source et l'entité cible directement sur le canvas. Champs suggérés, cardinalités MCD 1,N — 1,1 posées près de chaque entité.",
+    text: "Clique ce bouton ⇄ Relier, puis l'entité source et l'entité cible directement sur le canvas. Champs suggérés, cardinalités MCD 1,N — 1,1 posées près de chaque entité.",
   },
   {
     target: "#tour-lots",
@@ -124,7 +124,6 @@ export default function App() {
   const [tourPos, setTourPos] = useState<{ top: number; left: number } | null>(null);
   const canvasRef = useRef<HTMLDivElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
-  const panRef = useRef<null | { sx: number; sy: number; cx: number; cy: number }>(null);
   const worldRef = useRef<HTMLDivElement>(null);
   // Molette : on accumule les deltas et on zoome 1 fois / frame.
   const wheelRaf = useRef(0);
@@ -317,10 +316,12 @@ export default function App() {
     setSlots((ss) => ss.map((s) => (s.id === id ? { ...s, ...patch } : s)));
   }, []);
   const addSlot = useCallback((name?: string, source?: string) => {
+    const id = uid("slot");
     const n = slots.length + 1;
     setSlots((ss) => [...ss.map((s) => ({ ...s, collapsed: true })), {
-      id: uid("slot"), name: name?.trim() || `Modèle ${n}`, source: source ?? "", collapsed: false, msg: "",
+      id, name: name?.trim() || `Modèle ${n}`, source: source ?? "", collapsed: false, msg: "",
     }]);
+    return id;
   }, [slots.length]);
   // Formulaire "modèle perso" de la galerie : crée un vrai slot du panneau gauche.
   const [customName, setCustomName] = useState("");
@@ -349,20 +350,25 @@ export default function App() {
           ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === "z")) {
         e.preventDefault(); redo(); return;
       }
+      if (e.key === "Escape") {
+        if (exportView) { setExportView(null); setExportLotId(null); return; }
+        if (showLots) { setShowLots(false); return; }
+        if (typing) return;
+        if (linkModeRef.current) { setLinkMode(false); setLinkFromId(null); }
+        else setFocusMode(false);
+        return;
+      }
       if (typing) return;
+      if (exportView || showLots) return; // modale ouverte : que Echap / undo / redo
       if (e.key === "[") setShowLeft((v) => !v);
       else if (e.key === "]") setShowRight((v) => !v);
       else if (e.key.toLowerCase() === "f") fitView();
       else if (e.key.toLowerCase() === "m") setFocusMode((v) => !v);
-      else if (e.key === "Escape") {
-        if (linkModeRef.current) { setLinkMode(false); setLinkFromId(null); }
-        else setFocusMode(false);
-      }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [undo, redo, model]);
+  }, [undo, redo, model, exportView, showLots]);
 
   // ---------- validation ----------
   const issues = useMemo(() => {
@@ -429,20 +435,6 @@ export default function App() {
     });
     return ids;
   }, [apply, model]);
-
-  // Remplace tout le canvas par CE modèle.
-  const doImportSlot = useCallback((slot: ImportSlot) => {
-    const { model: m, kind: k } = parseAuto(slot.source);
-    if (!m.tables.length) {
-      updateSlot(slot.id, { msg: "Aucune table détectée. Vérifie ton schema (CREATE TABLE / model / pgTable)." });
-      return;
-    }
-    apply({ ...m, lots: [] });
-    setSelectedId(m.tables[0]?.id ?? null);
-    updateSlot(slot.id, { msg: `${m.tables.length} table(s) • ${m.relations.length} relation(s) [${k}].` });
-    setParseMsg(`« ${slot.name} » chargé sur le canvas.`);
-    fitViewSoon();
-  }, [apply, updateSlot]);
 
   // Ajoute CE modèle au canvas sans effacer ceux déjà présents,
   // puis regroupe ses tables dans un lot au nom du modèle.
@@ -588,6 +580,13 @@ export default function App() {
   const addRelation = useCallback(() => {
     const { fromTable, fromField, toTable, toField, cardA, cardB } = relForm;
     if (!fromTable || !fromField || !toTable || !toField) return;
+    const dup = model.relations.some(
+      (r) => r.fromTable === fromTable && r.fromField === fromField && r.toTable === toTable && r.toField === toField
+    );
+    if (dup) {
+      setParseMsg(`Lien déjà existant : ${fromTable}.${fromField} → ${toTable}.${toField}.`);
+      return;
+    }
     const rel: DBRelation = {
       id: uid("rel"), fromTable, fromField, toTable, toField, fromCard: cardA, toCard: cardB,
     };
@@ -599,7 +598,7 @@ export default function App() {
       relations: [...m.relations, rel],
     }));
     setRelForm((f) => ({ ...f, fromField: "", toField: "" }));
-  }, [relForm, apply]);
+  }, [relForm, apply, model]);
 
   const deleteRelation = useCallback((id: string) => {
     apply((m) => ({ ...m, relations: m.relations.filter((r) => r.id !== id) }));
@@ -639,6 +638,14 @@ export default function App() {
       fromTable: src.name, fromField, toTable: t.name, toField,
       fromCard: "1,N", toCard: "1,1",
     };
+    const dup = model.relations.some(
+      (r) => r.fromTable === rel.fromTable && r.fromField === rel.fromField && r.toTable === rel.toTable && r.toField === rel.toField
+    );
+    if (dup) {
+      setParseMsg(`Lien déjà existant : ${rel.fromTable}.${rel.fromField} → ${rel.toTable}.${rel.toField}. Choisis d'autres champs ou modifie-le dans Édition.`);
+      setLinkFromId(null);
+      return;
+    }
     apply((m) => ({
       ...m,
       tables: m.tables.map((x) =>
@@ -651,35 +658,20 @@ export default function App() {
     setLinkFromId(null); // le mode reste actif pour enchaîner
   }, [linkFromId, model, apply, suggestFromField, suggestToField]);
 
-  // ---------- lots de modèles (base) + lots utilisateur ----------
-  const loadLot = useCallback((lot: LotTemplate, mode: "add" | "replace") => {
+  // ---------- galerie : un modèle choisi S'AJOUTE aux autres (jamais de remplacement) ----------
+  // Il rejoint le canvas (à droite) + un lot à son nom + un slot du panneau gauche.
+  const loadLot = useCallback((lot: LotTemplate) => {
     const parsed = parseAuto(lot.sql).model;
-    const reid = (ms: DBModel): DBModel => ({
-      tables: ms.tables.map((t) => ({ ...t, id: uid("t"), fields: t.fields.map((f) => ({ ...f, id: uid("f") })) })),
-      relations: ms.relations.map((r) => ({ ...r, id: uid("rel") })),
-    });
-    if (mode === "replace") {
-      if (!confirm(`Remplacer le canvas par le lot « ${lot.titre} » ?`)) return;
-      const m = reid(parsed);
-      const lotId = uid("lot");
-      apply({
-        ...m,
-        lots: [{
-          id: lotId, name: `${lot.numero} · ${lot.titre}`, color: LOT_COLORS[0],
-          tableIds: m.tables.map((t) => t.id),
-        }],
-      });
-      setSelectedId(m.tables[0]?.id ?? null);
-      setParseMsg(`Lot ${lot.numero} · ${lot.titre} chargé : ${m.tables.length} tables, ${m.relations.length} liens.`);
-    } else {
-      const ids = mergeParsed(parsed);
-      createLot(`${lot.numero} · ${lot.titre}`, ids);
-      setSelectedId(ids[0] ?? null);
-      setParseMsg(`Lot ${lot.numero} · ${lot.titre} ajouté au canvas : relie ses entités à la main.`);
-    }
+    const ids = mergeParsed(parsed);
+    const name = `${lot.numero} · ${lot.titre}`;
+    createLot(name, ids);
+    const slotId = addSlot(name, lot.sql);
+    updateSlot(slotId, { msg: `Ajouté : ${parsed.tables.length} table(s) sur le canvas et dans « Mes lots ».` });
+    setSelectedId(ids[0] ?? null);
+    setParseMsg(`« ${name} » ajouté aux modèles présents.`);
     setShowLots(false);
     fitViewSoon();
-  }, [apply, mergeParsed, createLot]);
+  }, [mergeParsed, createLot, addSlot, updateSlot]);
 
   // ---------- layout / camera ----------
   const autoLayout = useCallback(() => {
@@ -698,17 +690,18 @@ export default function App() {
   }, [apply]);
 
   const fitView = useCallback(() => {
-    if (!model.tables.length) { setCam({ x: 20, y: 20, z: 1 }); return; }
+    const tables = visibleTables.length ? visibleTables : model.tables;
+    if (!tables.length) { setCam({ x: 20, y: 20, z: 1 }); return; }
     const el = wrapRef.current;
     const W = el?.clientWidth || 1000;
     const H = el?.clientHeight || 700;
-    const minX = Math.min(...model.tables.map((t) => t.x));
-    const minY = Math.min(...model.tables.map((t) => t.y));
-    const maxX = Math.max(...model.tables.map((t) => t.x + CARD_W));
-    const maxY = Math.max(...model.tables.map((t) => t.y + cardH(t)));
+    const minX = Math.min(...tables.map((t) => t.x));
+    const minY = Math.min(...tables.map((t) => t.y));
+    const maxX = Math.max(...tables.map((t) => t.x + CARD_W));
+    const maxY = Math.max(...tables.map((t) => t.y + cardH(t)));
     const z = Math.min(2.5, Math.max(0.2, Math.min((W - 80) / Math.max(1, maxX - minX), (H - 80) / Math.max(1, maxY - minY))));
     setCam({ x: 40 - minX * z, y: 40 - minY * z, z: +z.toFixed(2) });
-  }, [model]);
+  }, [model, visibleTables]);
   const fitViewSoon = () => setTimeout(() => fitView(), 60);
 
   const centerOn = useCallback((t: DBTable) => {
@@ -810,17 +803,17 @@ export default function App() {
     const world = worldRef.current;
     if (!world) return;
     const sx = e.clientX, sy = e.clientY, cx = cam.x, cy = cam.y, z = cam.z;
-    panRef.current = { sx, sy, cx, cy };
+    let alive = true;
     let lx = cx, ly = cy;
     const move = (ev: MouseEvent) => {
-      if (!panRef.current) return;
+      if (!alive) return;
       lx = cx + (ev.clientX - sx);
       ly = cy + (ev.clientY - sy);
       // Déplacement pur compositeur : aucun re-render, aucun repaint du fond.
       world.style.transform = `translate(${lx}px, ${ly}px) scale(${z})`;
     };
     const up = () => {
-      panRef.current = null;
+      alive = false;
       window.removeEventListener("mousemove", move);
       window.removeEventListener("mouseup", up);
       setCam({ x: lx, y: ly, z }); // UN seul render : tout se recale (cartes, liens)
@@ -922,16 +915,18 @@ export default function App() {
     URL.revokeObjectURL(a.href);
   };
 
+  const exportByName = useMemo(() => new Map(exportModel.tables.map((t) => [t.name, t])), [exportModel]);
   const exportSVGString = useCallback(() => {
     const pad = 60;
-    const maxX = Math.max(...model.tables.map((t) => t.x + CARD_W), 800) + pad;
-    const maxY = Math.max(...model.tables.map((t) => t.y + cardH(t)), 600) + pad;
+    const tables = exportModel.tables;
+    const maxX = (tables.length ? Math.max(...tables.map((t) => t.x + CARD_W), 800) : 800) + pad;
+    const maxY = (tables.length ? Math.max(...tables.map((t) => t.y + cardH(t)), 600) : 600) + pad;
     const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
     let s = `<svg xmlns="http://www.w3.org/2000/svg" width="${maxX}" height="${maxY}" font-family="Space Mono,monospace">`;
     s += `<rect width="100%" height="100%" fill="#E9E7E1"/>`;
-    for (const r of model.relations) {
-      const a = byName.get(r.fromTable);
-      const b = byName.get(r.toTable);
+    for (const r of exportModel.relations) {
+      const a = exportByName.get(r.fromTable);
+      const b = exportByName.get(r.toTable);
       if (!a || !b) continue;
       const x1 = a.x + CARD_W, y1 = fieldY(a, r.fromField);
       const x2 = b.x, y2 = fieldY(b, r.toField);
@@ -941,7 +936,7 @@ export default function App() {
       s += `<text x="${x1 + 9}" y="${y1 - 8}" font-size="10" font-weight="700" fill="#111111">${cA}</text>`;
       s += `<text x="${x2 - 9}" y="${y2 - 8}" font-size="10" font-weight="700" fill="#111111" text-anchor="end">${cB}</text>`;
     }
-    for (const t of model.tables) {
+    for (const t of exportModel.tables) {
       const h = cardH(t);
       s += `<g><rect x="${t.x}" y="${t.y}" width="${CARD_W}" height="${h}" fill="#FBFAF7" stroke="#111111" stroke-width="1.5"/>`;
       s += `<rect x="${t.x}" y="${t.y}" width="${CARD_W}" height="${HEADER_H}" fill="#111111"/>`;
@@ -954,7 +949,7 @@ export default function App() {
       s += `</g>`;
     }
     return s + `</svg>`;
-  }, [model, byName]);
+  }, [exportModel, exportByName]);
 
   const exportPNG = useCallback(() => {
     const svg = exportSVGString();
@@ -974,12 +969,12 @@ export default function App() {
         if (!b) return;
         const a = document.createElement("a");
         a.href = URL.createObjectURL(b);
-        a.download = "mcd.png";
+        a.download = exportFileName.replace(/\.[^.]+$/, "") + ".png";
         a.click();
       }, "image/png");
     };
     img.src = url;
-  }, [exportSVGString]);
+  }, [exportSVGString, exportFileName]);
 
   const newDiagram = () => {
     if (!confirm("Tout effacer et repartir de zéro ?")) return;
@@ -1030,7 +1025,7 @@ export default function App() {
         <div className="mn-group">
           <button onClick={undo} disabled={!hist.length} title="Ctrl+Z">Undo</button>
           <button onClick={redo} disabled={!future.length} title="Ctrl+Y">Redo</button>
-          <button onClick={() => setFocusMode(true)} title="Plein écran canvas (M)">⛶ Agrandir</button>
+          <button onClick={() => setFocusMode(true)} title="Plein écran canvas (M)">⤢ Agrandir</button>
           <button onClick={() => setShowRight(!showRight)}>Édition ]</button>
         </div>
       </nav>
@@ -1043,7 +1038,7 @@ export default function App() {
           <div className="hero-cta">
             <button className="btn primary" onClick={() => setShowLots(true)}>+ Modèles (6)</button>
             <button className="btn" onClick={() => openExport("sql")}>Exporter ↗</button>
-            <button className="btn" onClick={() => setFocusMode(true)} title="Agrandir la zone de travail (M)">⛶ Plein écran</button>
+            <button className="btn" onClick={() => setFocusMode(true)} title="Agrandir la zone de travail (M)">⤢ Plein écran</button>
           </div>
         </div>
         <div className="hero-sub">
@@ -1061,7 +1056,7 @@ export default function App() {
         <div className="cell"><b className="red">{model.relations.length}</b> LIENS</div>
         <div className="cell"><b>{totalFields}</b> CHAMPS</div>
         <div className="cell"><b className={lots.length ? "red" : ""}>{lots.length}</b> LOTS</div>
-        <div className="cell">{issues.length ? <><b className="red">⚠ {issues.length}</b> DIAG</> : <>✓ DIAG OK</>}</div>
+        <div className="cell">{issues.length ? <><b className="red">! {issues.length}</b> DIAG</> : <>✓ DIAG OK</>}</div>
         <div className="cell exp-cell" id="tour-export">
           <button className="exp-btn" onClick={() => openExport("sql")} title="Exporter tout en SQL">SQL</button>
           <button className="exp-btn" onClick={() => openExport("prisma")} title="Exporter tout en Prisma">PRISMA</button>
@@ -1111,11 +1106,8 @@ export default function App() {
                         spellCheck={false}
                       />
                       <div className="row">
-                        <button className="btn small primary" style={{ flex: 1 }} onClick={() => mergeImportSlot(slot)} title="Garde les modèles déjà sur la grille et ajoute celui-ci dans un lot à son nom">
+                        <button className="btn small primary full" onClick={() => mergeImportSlot(slot)} title="Garde les modèles déjà sur la grille et ajoute celui-ci dans un lot à son nom">
                           ＋ Ajouter {i === 0 ? "" : `#${i + 1}`} ↗
-                        </button>
-                        <button className="btn small" onClick={() => doImportSlot(slot)} title="Remplace tout le canvas par ce modèle">
-                          Remplacer
                         </button>
                       </div>
                       {slot.msg && <p className="msg">{slot.msg}</p>}
@@ -1164,7 +1156,7 @@ export default function App() {
                     <input className="mylot-name" value={lot.name} onChange={(e) => renameLot(lot.id, e.target.value)} />
                     <span className="mylot-count">{lot.tableIds.length}</span>
                     <button className="icon-btn" onClick={() => toggleLotHidden(lot.id)} title={lot.hidden ? "Afficher le lot" : "Masquer le lot"}>
-                      {lot.hidden ? "◌" : "◉"}
+                      {lot.hidden ? "Voir" : "Masquer"}
                     </button>
                   </div>
                   <div className="mylot-tables">
@@ -1210,9 +1202,9 @@ export default function App() {
             <div className="help">
               <p><b>Astuces —</b></p>
               <ul>
-                <li>Glisse les tables, <code>molette</code> = zoom vers le curseur, <code>F</code> = cadrer, <code>M</code> = plein écran.</li>
+                <li>Glisse les tables, <code>molette</code> = zoom vers le curseur, <code>F</code> = cadrer, <code>M</code> = plein écran, <code>Esc</code> = fermer.</li>
                 <li><code>Ctrl+Z</code> / <code>Ctrl+Y</code> = annuler / rétablir.</li>
-                <li><code>🔗 Relier</code> : clique 2 entités sur le canvas pour les lier.</li>
+                <li><code>⇄ Relier</code> : clique 2 entités sur le canvas pour les lier.</li>
                 <li>Les <code>xxx_id</code> + <code>REFERENCES</code> créent les liens auto.</li>
                 <li>Sauvegarde locale automatique.</li>
               </ul>
@@ -1247,10 +1239,10 @@ export default function App() {
               onClick={() => { setLinkMode((v) => !v); setLinkFromId(null); }}
               title="Relier 2 entités en cliquant : source puis cible (Echap pour quitter)"
             >
-              {linkMode ? "🔗 Liaison… ✓" : "🔗 Relier"}
+              {linkMode ? "⇄ Liaison… ✓" : "⇄ Relier"}
             </button>
             <button className="btn small primary" onClick={() => setFocusMode((v) => !v)} title="Agrandir / réduire la zone de travail (M)">
-              {focusMode ? "⇲ Réduire [M]" : "⛶ Agrandir [M]"}
+              {focusMode ? "⇲ Réduire [M]" : "⤢ Agrandir [M]"}
             </button>
             {!focusMode && (
               <>
@@ -1374,13 +1366,13 @@ export default function App() {
           </div>
           {q && (
             <div className="toolbar" style={{ borderTop: "1px solid var(--line)", borderBottom: "none" }}>
-              <span>{model.tables.filter(matchTable).length} résultat(s) pour « {query} » — double-clic pour centrer.</span>
+              <span>{visibleTables.filter(matchTable).length} résultat(s) visible(s) pour « {query} » — double-clic pour centrer.</span>
               <span style={{ flex: 1 }} />
-              {model.tables.filter(matchTable).slice(0, 6).map((t) => (
+              {visibleTables.filter(matchTable).slice(0, 6).map((t) => (
                 <button key={t.id} className="btn small" onClick={() => centerOn(t)}>{t.name}</button>
               ))}
               <button className="btn small primary" onClick={() => {
-                const ids = model.tables.filter(matchTable).map((t) => t.id);
+                const ids = visibleTables.filter(matchTable).map((t) => t.id);
                 createLot(query.trim(), ids);
               }}>＋ Lot depuis recherche</button>
               <button className="btn small danger" onClick={() => setQuery("")}>✕</button>
@@ -1427,7 +1419,7 @@ export default function App() {
               </>
             ) : (
               <>
-                <div className="panel-title"><span>✎ {selected.name}</span>
+                <div className="panel-title"><span>» {selected.name}</span>
                   <span style={{ display: "flex", gap: 4 }}>
                     <button className="icon-btn" onClick={() => setSelectedId(null)}>✕</button>
                     <button className="icon-btn" onClick={() => setShowRight(false)}>⟩</button>
@@ -1563,11 +1555,11 @@ export default function App() {
             <pre>{exportText}</pre>
             <div className="barcode" />
             <div className="row">
-              <button className="btn" onClick={() => navigator.clipboard.writeText(exportText)}>⧉ Copier</button>
+              <button className="btn" onClick={() => navigator.clipboard.writeText(exportText)}>Copier</button>
               <button className="btn primary" onClick={() => download(exportFileName, exportText)}>⤓ {exportFileName}</button>
               <span style={{ flex: 1 }} />
               <button className="btn" onClick={exportPNG}>⤓ PNG</button>
-              <button className="btn" onClick={() => download("mcd.svg", exportSVGString(), "image/svg+xml")}>SVG</button>
+              <button className="btn" onClick={() => download(exportFileName.replace(/\.[^.]+$/, "") + ".svg", exportSVGString(), "image/svg+xml")}>SVG</button>
             </div>
           </div>
         </div>
@@ -1578,7 +1570,7 @@ export default function App() {
           <div className="modal wide" onClick={(e) => e.stopPropagation()}>
             <div className="modal-head">
               <strong>MODÈLES <span>DE BASE+</span></strong>
-              <span className="muted">01—06 · ADD = ajoute · REPLACE = remplace · relie à la main ensuite</span>
+              <span className="muted">01—06 · AJOUTER = canvas + lot + panneau gauche · relie à la main ensuite</span>
               <button className="icon-btn" onClick={() => setShowLots(false)}>✕ FERMER</button>
             </div>
             <div className="lots-grid">
@@ -1609,8 +1601,7 @@ export default function App() {
                     <p className="desc">{lot.description}</p>
                     <div className="tables">{parsed.tables.map((t) => t.name).join(" · ")}</div>
                     <div className="lot-actions">
-                      <button onClick={() => loadLot(lot, "add")}>+ Ajouter</button>
-                      <button className="go" onClick={() => loadLot(lot, "replace")}>Remplacer ↗</button>
+                      <button className="go" onClick={() => loadLot(lot)}>+ Ajouter ↗</button>
                     </div>
                   </div>
                 );

@@ -28,6 +28,9 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 ::selection { background: var(--red); color: #fff; }
+button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible {
+  outline: 2px solid var(--red); outline-offset: 1px;
+}
 
 /* ============ APP SHELL ============ */
 .app { display: flex; flex-direction: column; height: 100vh; background: var(--paper); }
