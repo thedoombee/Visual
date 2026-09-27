@@ -181,10 +181,17 @@ export default function App() {
     () => model.tables.filter((t) => !t.slotId || !hiddenSlotIds.has(t.slotId)),
     [model, hiddenSlotIds]
   );
-  const visibleNames = useMemo(() => new Set(visibleTables.map((t) => t.name)), [visibleTables]);
+  // Résolution par ID (pas par nom) : même avec des doublons hérités d'anciennes
+  // sauvegardes, un lien vers une table masquée ne peut plus rester affiché.
+  const visibleIds = useMemo(() => new Set(visibleTables.map((t) => t.id)), [visibleTables]);
   const visibleRelations = useMemo(
-    () => model.relations.filter((r) => visibleNames.has(r.fromTable) && visibleNames.has(r.toTable)),
-    [model, visibleNames]
+    () =>
+      model.relations.filter((r) => {
+        const a = byName.get(r.fromTable);
+        const b = byName.get(r.toTable);
+        return !!a && !!b && visibleIds.has(a.id) && visibleIds.has(b.id);
+      }),
+    [model, byName, visibleIds]
   );
   const slotTableCount = useMemo(() => {
     const m = new Map<string, number>();
@@ -326,7 +333,10 @@ export default function App() {
   const issues = useMemo(() => {
     const out: { level: "err" | "warn"; text: string }[] = [];
     const names = new Set(model.tables.map((t) => t.name));
+    const seen = new Set<string>();
     for (const t of model.tables) {
+      if (seen.has(t.name)) out.push({ level: "err", text: `Nom en double : « ${t.name} » — renomme une des deux tables (les liens s'y perdent).` });
+      else seen.add(t.name);
       if (!t.fields.some((f) => f.pk)) out.push({ level: "warn", text: `${t.name} : sans PRIMARY KEY` });
       const linked = model.relations.some((r) => r.fromTable === t.name || r.toTable === t.name);
       if (!linked && model.tables.length > 1) out.push({ level: "warn", text: `${t.name} : table isolée (aucun lien)` });
@@ -406,30 +416,39 @@ export default function App() {
   }, [mergeParsed, updateSlot]);
 
   // ---------- tables ----------
+  const freeTableName = useCallback((base: string): string => {
+    const taken = new Set(model.tables.map((t) => t.name));
+    if (!taken.has(base)) return base;
+    let k = 2;
+    while (taken.has(`${base}_${k}`)) k++;
+    return `${base}_${k}`;
+  }, [model]);
+
   const addTable = useCallback(() => {
-    const n = model.tables.length + 1;
     const t: DBTable = {
       id: uid("t"),
-      name: `nouvelle_table_${n}`,
-      x: 80 + (n * 90) % 600,
-      y: 80 + (n * 70) % 500,
+      name: freeTableName(`nouvelle_table_${model.tables.length + 1}`),
+      x: 80 + (model.tables.length * 90) % 600,
+      y: 80 + (model.tables.length * 70) % 500,
       fields: [{ id: uid("f"), name: "id", type: "SERIAL", pk: true, nullable: false }],
     };
     apply((m) => ({ ...m, tables: [...m.tables, t] }));
     setSelectedId(t.id);
-  }, [model.tables.length, apply]);
+  }, [model.tables.length, apply, freeTableName]);
 
   const duplicateTable = useCallback((id: string) => {
-    apply((m) => {
-      const t = m.tables.find((x) => x.id === id);
-      if (!t) return m;
-      const copy: DBTable = {
-        ...t, id: uid("t"), name: t.name + "_copie", x: t.x + 40, y: t.y + 40,
-        fields: t.fields.map((f) => ({ ...f, id: uid("f") })),
-      };
-      return { ...m, tables: [...m.tables, copy] };
-    });
-  }, [apply]);
+    const t = model.tables.find((x) => x.id === id);
+    if (!t) return;
+    const copy: DBTable = {
+      ...t,
+      id: uid("t"),
+      name: freeTableName(`${t.name}_copie`),
+      x: t.x + 40,
+      y: t.y + 40,
+      fields: t.fields.map((f) => ({ ...f, id: uid("f") })),
+    };
+    apply((m) => ({ ...m, tables: [...m.tables, copy] }));
+  }, [apply, model, freeTableName]);
 
   const deleteTable = useCallback((id: string) => {
     apply((m) => {
@@ -444,19 +463,29 @@ export default function App() {
   }, [apply]);
 
   const renameTable = useCallback((id: string, name: string) => {
+    const clean = name.trim();
+    if (!clean) {
+      setParseMsg("Nom de table vide : renommage ignoré.");
+      return;
+    }
+    const clash = model.tables.some((t) => t.id !== id && t.name === clean);
+    if (clash) {
+      setParseMsg(`Nom déjà pris : « ${clean} » existe déjà. Les noms de tables doivent être uniques (sinon les liens se trompent de table).`);
+      return;
+    }
     apply((m) => {
       const old = m.tables.find((t) => t.id === id);
       if (!old) return m;
       return {
-        tables: m.tables.map((t) => (t.id === id ? { ...t, name } : t)),
+        tables: m.tables.map((t) => (t.id === id ? { ...t, name: clean } : t)),
         relations: m.relations.map((r) => ({
           ...r,
-          fromTable: r.fromTable === old.name ? name : r.fromTable,
-          toTable: r.toTable === old.name ? name : r.toTable,
+          fromTable: r.fromTable === old.name ? clean : r.fromTable,
+          toTable: r.toTable === old.name ? clean : r.toTable,
         })),
       };
     });
-  }, [apply]);
+  }, [apply, model]);
 
   const moveTable = useCallback((id: string, x: number, y: number) => {
     setModel((m) => ({
@@ -929,8 +958,25 @@ export default function App() {
       try {
         const data = JSON.parse(String(rd.result)) as DBModel;
         if (!data.tables) throw new Error("bad");
-        apply({ tables: data.tables, relations: data.relations ?? [] });
-        setSelectedId(data.tables[0]?.id ?? null);
+        // Déduplique les noms (l'import JSON brut est le dernier trou possible) :
+        // on garde le nom sur la DERNIÈRE occurrence (= résolution actuelle des
+        // liens) et on renomme les précédentes, sans toucher aux relations.
+        const seen = new Set<string>();
+        let fixed = 0;
+        const tables = data.tables.map((t) => ({ ...t }));
+        for (let i = tables.length - 1; i >= 0; i--) {
+          const t = tables[i];
+          if (seen.has(t.name)) {
+            let k = 2;
+            while (seen.has(`${t.name}_${k}`)) k++;
+            t.name = `${t.name}_${k}`;
+            seen.add(t.name);
+            fixed++;
+          } else seen.add(t.name);
+        }
+        apply({ tables, relations: data.relations ?? [] });
+        setSelectedId(tables[0]?.id ?? null);
+        setParseMsg(fixed ? `JSON chargé : ${fixed} doublon(s) renommé(s).` : "JSON chargé.");
       } catch { alert("Fichier JSON invalide."); }
     };
     rd.readAsText(f);
@@ -1030,7 +1076,20 @@ export default function App() {
                     <span className={`badge ${kind}`}>{kindBadge[kind] ?? kind}</span>
                     <button
                       className="icon-btn"
-                      onClick={(e) => { e.stopPropagation(); updateSlot(slot.id, { hidden: !slot.hidden }); }}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        const n = slotTableCount.get(slot.id) ?? 0;
+                        if (!slot.hidden && n === 0) {
+                          // Aucune table rattachée (import antérieur au suivi par modèle)
+                          // : le dire clairement au lieu de ne rien faire en silence.
+                          updateSlot(slot.id, {
+                            hidden: true,
+                            msg: "Aucune table rattachée à ce modèle sur le canvas. Ré-ajoute-le via ＋ Ajouter pour pouvoir le masquer.",
+                          });
+                        } else {
+                          updateSlot(slot.id, { hidden: !slot.hidden });
+                        }
+                      }}
                       title={slot.hidden ? "Afficher ce modèle sur le canvas" : "Masquer ce modèle du canvas"}
                     >
                       {slot.hidden ? "Voir" : "Masquer"}
@@ -1164,7 +1223,7 @@ export default function App() {
             <div className="canvas-bgword">SCHEMA<span>+</span></div>
             <div ref={worldRef} className="world" style={{ transform: `translate(${cam.x}px, ${cam.y}px) scale(${cam.z})` }}>
               <svg className="edges" style={{ overflow: "visible" }}>
-                {model.relations.map((r) => {
+                {visibleRelations.map((r) => {
                   const a = byName.get(r.fromTable);
                   const b = byName.get(r.toTable);
                   if (!a || !b) return null;
@@ -1262,7 +1321,7 @@ export default function App() {
                 <button className="btn full" onClick={addTable}>＋ Ajouter une table</button>
                 <h4>Relations ({model.relations.length})</h4>
                 <div className="rellist">
-                {visibleRelations.map((r) => {
+                {model.relations.map((r) => {
                     const { a, b } = mcdCards(r);
                     return (
                       <div key={r.id} className="rel mcd">
