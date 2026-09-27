@@ -36,10 +36,29 @@ const TOUR_STEPS: TourStep[] = [
   },
 ];
 
-const TYPE_SUGGESTIONS = [
-  "SERIAL", "INTEGER", "BIGINT", "VARCHAR(255)", "VARCHAR(100)", "TEXT",
-  "BOOLEAN", "TIMESTAMP", "DATE", "UUID", "JSON", "JSONB", "FLOAT", "DECIMAL",
+// Liste complète des types de champs (Postgres-first) : on choisit, on n'écrit plus.
+const FIELD_TYPE_GROUPS: { label: string; types: string[] }[] = [
+  { label: "Identifiants auto", types: ["SERIAL", "BIGSERIAL", "SMALLSERIAL"] },
+  { label: "Entiers", types: ["SMALLINT", "INTEGER", "BIGINT"] },
+  {
+    label: "Nombres",
+    types: ["DECIMAL", "NUMERIC", "REAL", "FLOAT", "DOUBLE PRECISION", "MONEY"],
+  },
+  {
+    label: "Texte",
+    types: ["CHAR(1)", "VARCHAR(50)", "VARCHAR(100)", "VARCHAR(255)", "TEXT", "CITEXT"],
+  },
+  { label: "Booléen", types: ["BOOLEAN"] },
+  {
+    label: "Dates & heures",
+    types: ["DATE", "TIME", "TIMESTAMP", "TIMESTAMPTZ", "INTERVAL"],
+  },
+  { label: "UUID", types: ["UUID"] },
+  { label: "Réseau", types: ["INET", "CIDR", "MACADDR"] },
+  { label: "JSON", types: ["JSON", "JSONB"] },
+  { label: "Binaire", types: ["BYTEA"] },
 ];
+const ALL_FIELD_TYPES = new Set(FIELD_TYPE_GROUPS.flatMap((g) => g.types));
 
 function cardH(t: DBTable) {
   return HEADER_H + t.fields.length * ROW_H + 8;
@@ -1367,7 +1386,18 @@ export default function App() {
                   {selected.fields.map((f) => (
                     <div key={f.id} className="field-edit">
                       <input className="fname-in" value={f.name} onChange={(e) => updateField(selected.id, f.id, { name: e.target.value })} />
-                      <input className="ftype-in" value={f.type} list="types" onChange={(e) => updateField(selected.id, f.id, { type: e.target.value.toUpperCase() })} />
+                      <select
+                        className="ftype-in" value={f.type}
+                        onChange={(e) => updateField(selected.id, f.id, { type: e.target.value })}
+                        title="Type du champ — choisir dans la liste"
+                      >
+                        {!ALL_FIELD_TYPES.has(f.type) && <option value={f.type}>{f.type} (importé)</option>}
+                        {FIELD_TYPE_GROUPS.map((g) => (
+                          <optgroup key={g.label} label={g.label}>
+                            {g.types.map((t) => <option key={t} value={t}>{t}</option>)}
+                          </optgroup>
+                        ))}
+                      </select>
                       <div className="checks">
                         <label><input type="checkbox" checked={!!f.pk} onChange={(e) => updateField(selected.id, f.id, { pk: e.target.checked, nullable: e.target.checked ? false : f.nullable })} /> PK</label>
                         <label><input type="checkbox" checked={!!f.fk} onChange={(e) => updateField(selected.id, f.id, { fk: e.target.checked })} /> FK</label>
@@ -1378,7 +1408,6 @@ export default function App() {
                     </div>
                   ))}
                 </div>
-                <datalist id="types">{TYPE_SUGGESTIONS.map((t) => <option key={t} value={t} />)}</datalist>
                 <h4>Relations de cette table</h4>
                 <div className="rellist">
                   {model.relations.filter((r) => r.fromTable === selected.name || r.toTable === selected.name).map((r) => {
