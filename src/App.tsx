@@ -74,7 +74,7 @@ function edgePath(x1: number, y1: number, x2: number, y2: number) {
   const c2x = x2 + (ltr ? -dx : dx);
   return `M ${x1} ${y1} C ${c1x} ${y1}, ${c2x} ${y2}, ${x2} ${y2}`;
 }
-function initialModel(): DBModel {
+function initialModelForSlots(slots: ImportSlot[]): DBModel {
   try {
     const raw = localStorage.getItem(STORE_KEY) ?? localStorage.getItem("mcd-studio-v1");
     if (raw) {
@@ -83,11 +83,35 @@ function initialModel(): DBModel {
         // Migration : les anciens modèles sauvegardés peuvent contenir des lots, ignorés.
         const clean: DBModel & { lots?: unknown } = { ...parsed };
         delete clean.lots;
+        // Migration : les tables du modèle par défaut (pré-suivi par slot) n'ont
+        // pas de slotId, donc Masquer / compteur / suppression les ignoraient.
+        // On rattache les tables orphelines au slot dont le source les contient.
+        const attached = new Set(
+          clean.tables.map((t) => t.slotId).filter((x): x is string => !!x)
+        );
+        if (clean.tables.some((t) => !t.slotId)) {
+          for (const s of slots) {
+            if (attached.has(s.id) || !s.source.trim()) continue;
+            let names: Set<string>;
+            try {
+              names = new Set(parseAuto(s.source).model.tables.map((t) => t.name));
+            } catch { continue; }
+            if (!clean.tables.some((t) => !t.slotId && names.has(t.name))) continue;
+            clean.tables = clean.tables.map((t) =>
+              !t.slotId && names.has(t.name) ? { ...t, slotId: s.id } : t
+            );
+          }
+        }
         return clean;
       }
     }
   } catch { /* ignore */ }
-  return parseAuto(EXAMPLE_SQL).model;
+  const m = parseAuto(EXAMPLE_SQL).model;
+  // Premier lancement : les tables d'exemple appartiennent au « Modèle 1 »,
+  // sinon Masquer / compteur / ✕ ne les voient jamais.
+  const firstId = slots[0]?.id;
+  if (firstId) m.tables = m.tables.map((t) => ({ ...t, slotId: firstId }));
+  return m;
 }
 
 // Un slot = un modèle importé dans le panneau gauche.
@@ -100,27 +124,41 @@ export interface ImportSlot {
   msg: string;
   hidden?: boolean; // modèle masqué sur le canvas
 }
+// Snapshot d'historique : le workspace COMPLET (grille + panneau), pour que
+// Ctrl+Z après suppression d'un modèle restaure ses tables ET son slot.
+interface WorkspaceSnap { model: DBModel; slots: ImportSlot[] }
 const SLOTS_KEY = "mcd-studio-slots-v1";
+// Cache module : les deux `useState` init (slots PUIS modèle) doivent voir la
+// MÊME instance — sinon le slot « Modèle 1 » et les tables d'exemple auraient
+// des ids différents et la suppression/masquage raterait sa cible.
+let slotsInitCache: ImportSlot[] | null = null;
 function loadSlots(): ImportSlot[] {
+  if (slotsInitCache) return slotsInitCache;
   try {
     const raw = localStorage.getItem(SLOTS_KEY);
     if (raw) {
       const arr = JSON.parse(raw) as ImportSlot[];
-      if (Array.isArray(arr) && arr.length) return arr;
+      if (Array.isArray(arr) && arr.length) {
+        slotsInitCache = arr;
+        return arr;
+      }
     }
   } catch { /* ignore */ }
-  return [{ id: uid("slot"), name: "Modèle 1", source: EXAMPLE_SQL, collapsed: false, msg: "" }];
+  slotsInitCache = [{ id: uid("slot"), name: "Modèle 1", source: EXAMPLE_SQL, collapsed: false, msg: "" }];
+  return slotsInitCache;
 }
 
 export default function App() {
-  const [model, setModel] = useState<DBModel>(initialModel);
+  // Modèles importés : autant que tu veux, chacun pliable/dépliable,
+  // chacun avec son propre texte + message. Persistés en local.
+  // Déclarés AVANT le modèle : les tables d'exemple sont rattachées au slot 1
+  // (on réutilise la même instance de slots, sinon les ids divergeraient).
+  const [slots, setSlots] = useState<ImportSlot[]>(() => loadSlots());
+  const [model, setModel] = useState<DBModel>(() => initialModelForSlots(loadSlots()));
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [showLeft, setShowLeft] = useState(true);
   const [showRight, setShowRight] = useState(true);
   const [parseMsg, setParseMsg] = useState("");
-  // Modèles importés : autant que tu veux, chacun pliable/dépliable,
-  // chacun avec son propre texte + message. Persistés en local.
-  const [slots, setSlots] = useState<ImportSlot[]>(() => loadSlots());
   const [cam, setCam] = useState({ x: 20, y: 20, z: 1 });
   const [focusMode, setFocusMode] = useState(false);
   const [exportView, setExportView] = useState<null | "sql" | "prisma" | "drizzle" | "json">(null);
@@ -152,38 +190,33 @@ export default function App() {
   const textFileRef = useRef<HTMLInputElement>(null);
 
   // ---------- history (undo / redo) ----------
-  const [hist, setHist] = useState<DBModel[]>([]);
-  const [future, setFuture] = useState<DBModel[]>([]);
+  // Snapshots du workspace complet (grille + panneau). Tout est calculé AVANT
+  // les setState (pas d'effet dans les updaters — cf. StrictMode).
+  const [hist, setHist] = useState<WorkspaceSnap[]>([]);
+  const [future, setFuture] = useState<WorkspaceSnap[]>([]);
   const apply = useCallback((next: DBModel | ((m: DBModel) => DBModel)) => {
-    setModel((prev) => {
-      const n = typeof next === "function" ? (next as (m: DBModel) => DBModel)(prev) : next;
-      setHist((h) => [...h.slice(-49), prev]);
-      return n;
-    });
+    const n = typeof next === "function" ? (next as (m: DBModel) => DBModel)(model) : next;
+    const snap: WorkspaceSnap = { model, slots };
+    setHist((h) => [...h.slice(-49), snap]);
+    setModel(n);
     setFuture([]);
-  }, []);
+  }, [model, slots]);
   const undo = useCallback(() => {
-    setHist((h) => {
-      if (!h.length) return h;
-      const prev = h[h.length - 1];
-      setModel((cur) => {
-        setFuture((f) => [cur, ...f].slice(0, 50));
-        return prev;
-      });
-      return h.slice(0, -1);
-    });
-  }, []);
+    if (!hist.length) return;
+    const prev = hist[hist.length - 1];
+    setFuture((f) => [{ model, slots }, ...f].slice(0, 50));
+    setHist(hist.slice(0, -1));
+    setModel(prev.model);
+    setSlots(prev.slots);
+  }, [hist, model, slots]);
   const redo = useCallback(() => {
-    setFuture((f) => {
-      if (!f.length) return f;
-      const [next, ...rest] = f;
-      setModel((cur) => {
-        setHist((h) => [...h.slice(-49), cur]);
-        return next;
-      });
-      return rest;
-    });
-  }, []);
+    if (!future.length) return;
+    const [next, ...rest] = future;
+    setHist((h) => [...h.slice(-49), { model, slots }]);
+    setFuture(rest);
+    setModel(next.model);
+    setSlots(next.slots);
+  }, [future, model, slots]);
 
   const selected = useMemo(
     () => model.tables.find((t) => t.id === selectedId) ?? null,
@@ -306,16 +339,56 @@ export default function App() {
     setShowLeft(true);
     setParseMsg("Modèle perso ajouté au panneau gauche : plie/déplie, puis ＋ Ajouter.");
   }, [customName, customSource, addSlot]);
+  // ✕ d'un slot : supprime le modèle du panneau ET ses tables de la grille
+  // (avec leurs liens). Annulable via Ctrl+Z. Les tables créées à la main
+  // (sans slotId) ne sont jamais touchées — sauf rattrapage legacy ci-dessous.
   const deleteSlot = useCallback((id: string) => {
-    setSlots((ss) => ss.filter((s) => s.id !== id));
-    // Les tables du modèle redeviennent "sans modèle" : toujours visibles.
-    if (model.tables.some((t) => t.slotId === id)) {
-      apply((m) => ({
-        ...m,
-        tables: m.tables.map((t) => (t.slotId === id ? { ...t, slotId: undefined } : t)),
-      }));
+    // Cas nominal : tables taguées avec ce slotId.
+    const tagged = model.tables.filter((t) => t.slotId === id);
+    let doomedNames = new Set(tagged.map((t) => t.name));
+    let killUntagged: Set<string> | null = null;
+    if (!tagged.length) {
+      // Rattrapage legacy : modèle par défaut importé avant le suivi par slot
+      // (tables sans slotId). On ne supprime que les tables dont le nom figure
+      // dans le source du slot — jamais les créations manuelles.
+      const slot = slots.find((s) => s.id === id);
+      if (slot?.source.trim()) {
+        try {
+          const names = new Set(parseAuto(slot.source).model.tables.map((t) => t.name));
+          const orphans = model.tables.filter((t) => !t.slotId && names.has(t.name));
+          if (orphans.length) {
+            killUntagged = names;
+            doomedNames = new Set(orphans.map((t) => t.name));
+          }
+        } catch { /* source illisible : on retire juste le panneau */ }
+      }
     }
-  }, [apply, model]);
+    setSlots((ss) => ss.filter((s) => s.id !== id));
+    if (doomedNames.size) {
+      const names = doomedNames;
+      const untagged = killUntagged;
+      apply((m) => ({
+        tables: m.tables.filter(
+          (t) => !(t.slotId === id || (untagged && !t.slotId && untagged.has(t.name)))
+        ),
+        relations: m.relations.filter(
+          (r) => !names.has(r.fromTable) && !names.has(r.toTable)
+        ),
+      }));
+      setSelectedId(null);
+      setParseMsg("Modèle supprimé de la grille (Ctrl+Z pour annuler).");
+    } else if (model.tables.length) {
+      // Sécurité : on ne supprime jamais à l'aveugle. Si aucune table n'est
+      // rattachée au slot (source modifiée sans ré-ajout, état legacy…),
+      // on le dit explicitement, avec les noms, au lieu de laisser croire
+      // que la grille a été nettoyée.
+      const orphans = model.tables.filter((t) => !t.slotId).map((t) => t.name);
+      const detail = orphans.length
+        ? ` Tables sans modèle sur la grille : ${orphans.slice(0, 8).join(", ")}${orphans.length > 8 ? "…" : ""}.`
+        : " Toutes les tables de la grille appartiennent à d'autres modèles.";
+      setParseMsg(`Panneau retiré, grille inchangée : aucune table rattachée à ce modèle.${detail}`);
+    }
+  }, [apply, model, slots]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -721,7 +794,7 @@ export default function App() {
     const z = cam.z;
     const sx0 = e.clientX, sy0 = e.clientY;
     let tx = 0, ty = 0, moved = false;
-    const snapshot = model; // état avant déplacement, pour un seul pas d'historique
+    const snapshot: WorkspaceSnap = { model, slots }; // état avant déplacement, pour un seul pas d'historique
     // Liens touchés par cette table : on garde les nœuds SVG + coords de base
     // pour redessiner courbes, pastilles et cardinalités EN DIRECT (zéro render).
     interface LiveEdge {
@@ -1113,7 +1186,7 @@ export default function App() {
                     >
                       {slot.hidden ? "Voir" : "Masquer"}
                     </button>
-                    <button className="icon-btn danger" onClick={(e) => { e.stopPropagation(); deleteSlot(slot.id); }} title="Retirer ce modèle du panneau">✕</button>
+                    <button className="icon-btn danger" onClick={(e) => { e.stopPropagation(); deleteSlot(slot.id); }} title="Supprimer ce modèle du panneau et de la grille">✕</button>
                   </div>
                   {!slot.collapsed && (
                     <>
