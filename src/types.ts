@@ -51,5 +51,16 @@ export interface DBModel {
   relations: DBRelation[];
 }
 
+// Un slot = un modèle importé dans le panneau gauche.
+// Chacun garde son texte, se plie/déplie, et peut être ajouté au canvas.
+export interface ImportSlot {
+  id: string;
+  name: string;
+  source: string;
+  collapsed: boolean;
+  msg: string;
+  hidden?: boolean; // modèle masqué sur le canvas
+}
+
 export const uid = (p = "id") =>
   `${p}_${Math.random().toString(36).slice(2, 8)}`;
