@@ -4,65 +4,163 @@ import type { DBModel, DBRelation, DBTable, ImportSlot } from "./types";
 import { uid } from "./types";
 import { parseAuto } from "./parsers";
 import { toDrizzle, toPrisma, toSQL } from "./generators";
-import { type StarterPack } from "./templates";
-import { CARD_W, edgePath, fieldY } from "./domain/geometry";
-import {
-  addFieldTo,
-  addRelationTo,
-  autoLayoutModel,
-  createTable,
-  deleteFieldFrom,
-  duplicateTable as duplicateTableOf,
-  hiddenSlotIdsOf,
-  insertTable,
-  isDuplicateRelation,
-  mergeModel,
-  moveTableIn,
-  removeRelation,
-  removeSlotTables,
-  removeTable,
-  renameTableIn,
-  slotTableCounts,
-  suggestFromField as suggestFromFieldOf,
-  suggestToField as suggestToFieldOf,
-  tagUntaggedTables,
-  updateFieldIn,
-  updateRelationCards,
-  validateModel,
-  visibleRelationsOf,
-  visibleTablesOf,
-} from "./domain/model";
-import {
-  initialModel,
-  loadSlots,
-  saveModel,
-  saveSlots,
-} from "./services/storage";
-import { useHistory } from "./hooks/useHistory";
-import { useCamera } from "./hooks/useCamera";
-import { useTour } from "./hooks/useTour";
-import { CommandBar } from "./components/CommandBar";
-import { StatusBar } from "./components/StatusBar";
-import { TourOverlay } from "./components/TourOverlay";
-import { ExportModal } from "./components/ExportModal";
-import { GalleryModal } from "./components/GalleryModal";
-import { LeftPanel } from "./components/LeftPanel";
-import { RightPanel } from "./components/RightPanel";
-import { CanvasView } from "./components/CanvasView";
-import { exportSVGString as buildExportSVG } from "./domain/exportSvg";
+import { EXAMPLE_DRIZZLE, EXAMPLE_PRISMA, EXAMPLE_SQL } from "./examples";
+import { STARTERS, type StarterPack } from "./templates";
 
-// Workspace = tout ce que le Ctrl+Z doit restaurer d'un coup : le canvas
-// (model) ET les modèles du panneau gauche (slots).
-interface Workspace {
-  model: DBModel;
-  slots: ImportSlot[];
+const CARD_W = 236;
+const HEADER_H = 36;
+const ROW_H = 27;
+const STORE_KEY = "mcd-studio-v2";
+const TOUR_KEY = "mcd-studio-tour-v1";
+
+interface TourStep { target: string | null; title: string; text: string; }
+const TOUR_STEPS: TourStep[] = [
+  {
+    target: null,
+    title: "Bienvenue — visite express",
+    text: "3 mini-fenêtres pour prendre en main : modèles, liaison, exports. Clique Suivant, ou Passer pour explorer seul.",
+  },
+  {
+    target: ".panel.left",
+    title: "01 · Tes modèles importés",
+    text: "Colle chaque schema (Prisma, Drizzle, SQL) dans son modèle. Plie/déplie au clic sur le bandeau, + Modèle pour en ajouter autant que tu veux, puis ＋ Ajouter pour l'envoyer sur la grille.",
+  },
+  {
+    target: "#tour-link-btn",
+    title: "02 · Relie sur la grille",
+    text: "Clique ce bouton ⇄ Relier, puis l'entité source et l'entité cible directement sur le canvas. Champs suggérés, cardinalités MCD 1,N — 1,1 posées près de chaque entité.",
+  },
+  {
+    target: "#tour-export",
+    title: "03 · Exporte tout",
+    text: "Onglets SQL / Prisma / Drizzle / JSON sur tout le canvas, plus SVG et PNG. La barre du bas suit ta sélection, ton zoom et tes actions. Bon MCD !",
+  },
+];
+
+// Liste complète des types de champs (Postgres-first) : on choisit, on n'écrit plus.
+const FIELD_TYPE_GROUPS: { label: string; types: string[] }[] = [
+  { label: "Identifiants auto", types: ["SERIAL", "BIGSERIAL", "SMALLSERIAL"] },
+  { label: "Entiers", types: ["SMALLINT", "INTEGER", "BIGINT"] },
+  {
+    label: "Nombres",
+    types: ["DECIMAL", "NUMERIC", "REAL", "FLOAT", "DOUBLE PRECISION", "MONEY"],
+  },
+  {
+    label: "Texte",
+    types: ["CHAR(1)", "VARCHAR(50)", "VARCHAR(100)", "VARCHAR(255)", "TEXT", "CITEXT"],
+  },
+  { label: "Booléen", types: ["BOOLEAN"] },
+  {
+    label: "Dates & heures",
+    types: ["DATE", "TIME", "TIMESTAMP", "TIMESTAMPTZ", "INTERVAL"],
+  },
+  { label: "UUID", types: ["UUID"] },
+  { label: "Réseau", types: ["INET", "CIDR", "MACADDR"] },
+  { label: "JSON", types: ["JSON", "JSONB"] },
+  { label: "Binaire", types: ["BYTEA"] },
+];
+const ALL_FIELD_TYPES = new Set(FIELD_TYPE_GROUPS.flatMap((g) => g.types));
+
+function cardH(t: DBTable) {
+  return HEADER_H + t.fields.length * ROW_H + 8;
+}
+function fieldY(t: DBTable, fieldName: string) {
+  const idx = t.fields.findIndex((f) => f.name === fieldName);
+  return t.y + HEADER_H + (idx < 0 ? 0 : idx * ROW_H + ROW_H / 2);
+}
+function edgePath(x1: number, y1: number, x2: number, y2: number) {
+  const dx = Math.max(40, Math.abs(x2 - x1) / 2);
+  const ltr = x2 >= x1;
+  const c1x = x1 + (ltr ? dx : -dx);
+  const c2x = x2 + (ltr ? -dx : dx);
+  return `M ${x1} ${y1} C ${c1x} ${y1}, ${c2x} ${y2}, ${x2} ${y2}`;
+}
+function initialModelForSlots(slots: ImportSlot[]): DBModel {
+  try {
+    const raw = localStorage.getItem(STORE_KEY) ?? localStorage.getItem("mcd-studio-v1");
+    if (raw) {
+      const parsed = JSON.parse(raw) as DBModel;
+      if (parsed.tables?.length) {
+        // Migration : les anciens modèles sauvegardés peuvent contenir des lots, ignorés.
+        const clean: DBModel & { lots?: unknown } = { ...parsed };
+        delete clean.lots;
+        // Migration : les tables du modèle par défaut (pré-suivi par slot) n'ont
+        // pas de slotId, donc Masquer / compteur / suppression les ignoraient.
+        // On rattache les tables orphelines au slot dont le source les contient.
+        const attached = new Set(
+          clean.tables.map((t) => t.slotId).filter((x): x is string => !!x)
+        );
+        if (clean.tables.some((t) => !t.slotId)) {
+          for (const s of slots) {
+            if (attached.has(s.id) || !s.source.trim()) continue;
+            let names: Set<string>;
+            try {
+              names = new Set(parseAuto(s.source).model.tables.map((t) => t.name));
+            } catch { continue; }
+            if (!clean.tables.some((t) => !t.slotId && names.has(t.name))) continue;
+            clean.tables = clean.tables.map((t) =>
+              !t.slotId && names.has(t.name) ? { ...t, slotId: s.id } : t
+            );
+          }
+        }
+        return clean;
+      }
+    }
+  } catch { /* ignore */ }
+  const m = parseAuto(EXAMPLE_SQL).model;
+  // Premier lancement : les tables d'exemple appartiennent au « Modèle 1 »,
+  // sinon Masquer / compteur / ✕ ne les voient jamais.
+  const firstId = slots[0]?.id;
+  if (firstId) m.tables = m.tables.map((t) => ({ ...t, slotId: firstId }));
+  return m;
+}
+
+// Un slot = un modèle importé dans le panneau gauche.
+// Chacun garde son texte, se plie/déplie, et peut être ajouté au canvas.
+export interface ImportSlot {
+  id: string;
+  name: string;
+  source: string;
+  collapsed: boolean;
+  msg: string;
+  hidden?: boolean; // modèle masqué sur le canvas
+}
+// Snapshot d'historique : le workspace COMPLET (grille + panneau), pour que
+// Ctrl+Z après suppression d'un modèle restaure ses tables ET son slot.
+interface WorkspaceSnap { model: DBModel; slots: ImportSlot[] }
+const SLOTS_KEY = "mcd-studio-slots-v1";
+// Cache module : les deux `useState` init (slots PUIS modèle) doivent voir la
+// MÊME instance — sinon le slot « Modèle 1 » et les tables d'exemple auraient
+// des ids différents et la suppression/masquage raterait sa cible.
+let slotsInitCache: ImportSlot[] | null = null;
+function loadSlots(): ImportSlot[] {
+  if (slotsInitCache) return slotsInitCache;
+  try {
+    const raw = localStorage.getItem(SLOTS_KEY);
+    if (raw) {
+      const arr = JSON.parse(raw) as ImportSlot[];
+      if (Array.isArray(arr) && arr.length) {
+        slotsInitCache = arr;
+        return arr;
+      }
+    }
+  } catch { /* ignore */ }
+  slotsInitCache = [{ id: uid("slot"), name: "Modèle 1", source: EXAMPLE_SQL, collapsed: false, msg: "" }];
+  return slotsInitCache;
 }
 
 export default function App() {
+  // Modèles importés : autant que tu veux, chacun pliable/dépliable,
+  // chacun avec son propre texte + message. Persistés en local.
+  // Déclarés AVANT le modèle : les tables d'exemple sont rattachées au slot 1
+  // (on réutilise la même instance de slots, sinon les ids divergeraient).
+  const [slots, setSlots] = useState<ImportSlot[]>(() => loadSlots());
+  const [model, setModel] = useState<DBModel>(() => initialModelForSlots(loadSlots()));
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [showLeft, setShowLeft] = useState(true);
   const [showRight, setShowRight] = useState(true);
   const [parseMsg, setParseMsg] = useState("");
+  const [cam, setCam] = useState({ x: 20, y: 20, z: 1 });
   const [focusMode, setFocusMode] = useState(false);
   const [exportView, setExportView] = useState<null | "sql" | "prisma" | "drizzle" | "json">(null);
   const [showGallery, setShowGallery] = useState(false);
@@ -73,60 +171,34 @@ export default function App() {
   // Repeinture live des liens pendant un drag : accès direct au nœud monde.
   const worldRef = useRef<HTMLDivElement | null>(null);
 
-  // Modèles importés : autant que tu veux, chacun pliable/dépliable,
-  // chacun avec son propre texte + message. Persistés en local.
-  // Un seul historique pour tout le workspace : un Ctrl+Z après une
-  // suppression fait revenir les tables sur la grille ET l'entrée du panneau.
-  // Les retouches du panneau (texte, nom, plié, masqué) passent par `setSlots`
-  // (sans pas d'historique) ; les changements structurels (ajout,
-  // suppression) passent par `applyWorkspace` (avec historique).
-  const {
-    present: workspace,
-    setPresent: setWorkspace,
-    apply: applyWorkspace,
-    commit: commitWorkspace,
-    undo,
-    redo,
-    canUndo,
-    canRedo,
-  } = useHistory<Workspace>(() => {
-    const ss = loadSlots();
-    let m = initialModel();
-    // Migration des stockages enregistrés quand le modèle de base n'était
-    // pas tagué : aucune table rattachée mais des tables orphelines sur le
-    // canvas → elles appartiennent au premier modèle du panneau gauche.
-    // (StrictMode-clean : calcul pur dans l'initialiseur, aucun effet ici.)
-    if (m.tables.length && m.tables.every((t) => !t.slotId) && ss.length) {
-      m = tagUntaggedTables(m, ss[0].id);
-    }
-    return { model: m, slots: ss };
-  });
-  const model = workspace.model;
-  const slots = workspace.slots;
-
-  /** Pousse modèle + slots d'un coup (un seul pas d'historique). */
-  const apply = useCallback((next: DBModel | ((prev: DBModel) => DBModel)) => {
-    applyWorkspace((w) => ({
-      ...w,
-      model: typeof next === "function" ? (next as (p: DBModel) => DBModel)(w.model) : next,
-    }));
-  }, [applyWorkspace]);
-
-  /** Remplacement direct du modèle, SANS pas d'historique (drag). */
-  const setModel: Dispatch<SetStateAction<DBModel>> = useCallback((action: SetStateAction<DBModel>) => {
-    setWorkspace((w) => ({
-      ...w,
-      model: typeof action === "function" ? (action as (p: DBModel) => DBModel)(w.model) : action,
-    }));
-  }, [setWorkspace]);
-
-  /** Retouches du panneau (texte, nom, plié, masqué), SANS pas d'historique. */
-  const setSlots: Dispatch<SetStateAction<ImportSlot[]>> = useCallback((action: SetStateAction<ImportSlot[]>) => {
-    setWorkspace((w) => ({
-      ...w,
-      slots: typeof action === "function" ? (action as (p: ImportSlot[]) => ImportSlot[])(w.slots) : action,
-    }));
-  }, [setWorkspace]);
+  // ---------- history (undo / redo) ----------
+  // Snapshots du workspace complet (grille + panneau). Tout est calculé AVANT
+  // les setState (pas d'effet dans les updaters — cf. StrictMode).
+  const [hist, setHist] = useState<WorkspaceSnap[]>([]);
+  const [future, setFuture] = useState<WorkspaceSnap[]>([]);
+  const apply = useCallback((next: DBModel | ((m: DBModel) => DBModel)) => {
+    const n = typeof next === "function" ? (next as (m: DBModel) => DBModel)(model) : next;
+    const snap: WorkspaceSnap = { model, slots };
+    setHist((h) => [...h.slice(-49), snap]);
+    setModel(n);
+    setFuture([]);
+  }, [model, slots]);
+  const undo = useCallback(() => {
+    if (!hist.length) return;
+    const prev = hist[hist.length - 1];
+    setFuture((f) => [{ model, slots }, ...f].slice(0, 50));
+    setHist(hist.slice(0, -1));
+    setModel(prev.model);
+    setSlots(prev.slots);
+  }, [hist, model, slots]);
+  const redo = useCallback(() => {
+    if (!future.length) return;
+    const [next, ...rest] = future;
+    setHist((h) => [...h.slice(-49), { model, slots }]);
+    setFuture(rest);
+    setModel(next.model);
+    setSlots(next.slots);
+  }, [future, model, slots]);
 
   const selected = useMemo(
     () => model.tables.find((t) => t.id === selectedId) ?? null,
@@ -190,20 +262,56 @@ export default function App() {
     setShowLeft(true);
     setParseMsg("Modèle perso ajouté au panneau gauche : plie/déplie, puis ＋ Ajouter.");
   }, [customName, customSource, addSlot]);
+  // ✕ d'un slot : supprime le modèle du panneau ET ses tables de la grille
+  // (avec leurs liens). Annulable via Ctrl+Z. Les tables créées à la main
+  // (sans slotId) ne sont jamais touchées — sauf rattrapage legacy ci-dessous.
   const deleteSlot = useCallback((id: string) => {
-    const doomed = model.tables.filter((t) => t.slotId === id);
-    // Atomique : UN seul pas d'historique retire le slot ET ses tables —
-    // un Ctrl+Z fait donc revenir les deux ensemble.
-    applyWorkspace((w) => ({
-      slots: w.slots.filter((s) => s.id !== id),
-      model: removeSlotTables(w.model, id),
-    }));
-    // La suppression d'un modèle retire ses tables + leurs liens du canvas.
-    if (doomed.length) {
-      if (selectedId && doomed.some((t) => t.id === selectedId)) setSelectedId(null);
-      setParseMsg(`Modèle supprimé : ${doomed.length} table(s) retirée(s) du canvas. (Ctrl+Z pour annuler)`);
+    // Cas nominal : tables taguées avec ce slotId.
+    const tagged = model.tables.filter((t) => t.slotId === id);
+    let doomedNames = new Set(tagged.map((t) => t.name));
+    let killUntagged: Set<string> | null = null;
+    if (!tagged.length) {
+      // Rattrapage legacy : modèle par défaut importé avant le suivi par slot
+      // (tables sans slotId). On ne supprime que les tables dont le nom figure
+      // dans le source du slot — jamais les créations manuelles.
+      const slot = slots.find((s) => s.id === id);
+      if (slot?.source.trim()) {
+        try {
+          const names = new Set(parseAuto(slot.source).model.tables.map((t) => t.name));
+          const orphans = model.tables.filter((t) => !t.slotId && names.has(t.name));
+          if (orphans.length) {
+            killUntagged = names;
+            doomedNames = new Set(orphans.map((t) => t.name));
+          }
+        } catch { /* source illisible : on retire juste le panneau */ }
+      }
     }
-  }, [applyWorkspace, model, selectedId]);
+    setSlots((ss) => ss.filter((s) => s.id !== id));
+    if (doomedNames.size) {
+      const names = doomedNames;
+      const untagged = killUntagged;
+      apply((m) => ({
+        tables: m.tables.filter(
+          (t) => !(t.slotId === id || (untagged && !t.slotId && untagged.has(t.name)))
+        ),
+        relations: m.relations.filter(
+          (r) => !names.has(r.fromTable) && !names.has(r.toTable)
+        ),
+      }));
+      setSelectedId(null);
+      setParseMsg("Modèle supprimé de la grille (Ctrl+Z pour annuler).");
+    } else if (model.tables.length) {
+      // Sécurité : on ne supprime jamais à l'aveugle. Si aucune table n'est
+      // rattachée au slot (source modifiée sans ré-ajout, état legacy…),
+      // on le dit explicitement, avec les noms, au lieu de laisser croire
+      // que la grille a été nettoyée.
+      const orphans = model.tables.filter((t) => !t.slotId).map((t) => t.name);
+      const detail = orphans.length
+        ? ` Tables sans modèle sur la grille : ${orphans.slice(0, 8).join(", ")}${orphans.length > 8 ? "…" : ""}.`
+        : " Toutes les tables de la grille appartiennent à d'autres modèles.";
+      setParseMsg(`Panneau retiré, grille inchangée : aucune table rattachée à ce modèle.${detail}`);
+    }
+  }, [apply, model, slots]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -452,7 +560,7 @@ export default function App() {
     const z = camera.cam.z;
     const sx0 = e.clientX, sy0 = e.clientY;
     let tx = 0, ty = 0, moved = false;
-    const snapshot = workspace; // état avant déplacement, pour un seul pas d'historique
+    const snapshot: WorkspaceSnap = { model, slots }; // état avant déplacement, pour un seul pas d'historique
     // Liens touchés par cette table : on garde les nœuds SVG + coords de base
     // pour redessiner courbes, pastilles et cardinalités EN DIRECT (zéro render).
     interface LiveEdge {
@@ -666,24 +774,121 @@ export default function App() {
 
       <div className="layout">
         {showLeft && !focusMode && (
-          <LeftPanel
-            slots={slots}
-            slotTableCount={slotTableCount}
-            issues={issues}
-            parseMsg={parseMsg}
-            onUpdateSlot={updateSlot}
-            onAddSlot={() => addSlot()}
-            onDeleteSlot={deleteSlot}
-            onMergeSlot={mergeImportSlot}
-            onHide={() => setShowLeft(false)}
-            onGallery={() => setShowGallery(true)}
-            onTour={openTour}
-            onPickTextFile={(slotId) => {
-              fileTarget.current = slotId;
-              textFileRef.current?.click();
-            }}
-            onPickJsonFile={() => fileRef.current?.click()}
-          />
+          <aside className="panel left">
+            <div className="panel-title"><span><span className="num">01 /</span> Modèles importés ({slots.length})</span>
+              <span style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                <button className="btn small primary" onClick={() => addSlot()} title="Ajouter un autre modèle">+ Modèle</button>
+                <button className="icon-btn" onClick={() => setShowLeft(false)}>⟨</button>
+              </span>
+            </div>
+            {slots.length === 0 && (
+              <>
+                <p className="muted">Aucun modèle. Ajoute ton premier schema pour commencer.</p>
+                <button className="btn primary full" onClick={() => addSlot()}>+ Ajouter un modèle</button>
+              </>
+            )}
+            {slots.map((slot, i) => {
+              const kind = detectKind(slot.source);
+              return (
+                <div key={slot.id} className={`slot ${slot.collapsed ? "folded" : ""} ${slot.hidden ? "masked" : ""}`}>
+                  <div className="slot-head" onClick={() => updateSlot(slot.id, { collapsed: !slot.collapsed })} title="Plier / déplier">
+                    <span className="slot-fold">{slot.collapsed ? "▸" : "▾"}</span>
+                    <input
+                      className="slot-name" value={slot.name}
+                      onClick={(e) => e.stopPropagation()}
+                      onChange={(e) => updateSlot(slot.id, { name: e.target.value })}
+                    />
+                    {(slotTableCount.get(slot.id) ?? 0) > 0 && (
+                      <span className="slot-count" title="Tables de ce modèle sur le canvas">{slotTableCount.get(slot.id)}</span>
+                    )}
+                    <span className={`badge ${kind}`}>{kindBadge[kind] ?? kind}</span>
+                    <button
+                      className="icon-btn"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        const n = slotTableCount.get(slot.id) ?? 0;
+                        if (!slot.hidden && n === 0) {
+                          // Aucune table rattachée (import antérieur au suivi par modèle)
+                          // : le dire clairement au lieu de ne rien faire en silence.
+                          updateSlot(slot.id, {
+                            hidden: true,
+                            msg: "Aucune table rattachée à ce modèle sur le canvas. Ré-ajoute-le via ＋ Ajouter pour pouvoir le masquer.",
+                          });
+                        } else {
+                          updateSlot(slot.id, { hidden: !slot.hidden });
+                        }
+                      }}
+                      title={slot.hidden ? "Afficher ce modèle sur le canvas" : "Masquer ce modèle du canvas"}
+                    >
+                      {slot.hidden ? "Voir" : "Masquer"}
+                    </button>
+                    <button className="icon-btn danger" onClick={(e) => { e.stopPropagation(); deleteSlot(slot.id); }} title="Supprimer ce modèle du panneau et de la grille">✕</button>
+                  </div>
+                  {!slot.collapsed && (
+                    <>
+                      <textarea
+                        value={slot.source}
+                        onChange={(e) => updateSlot(slot.id, { source: e.target.value, msg: "" })}
+                        placeholder="Colle ici ton schema.prisma, ton drizzle schema.ts ou ton CREATE TABLE…"
+                        spellCheck={false}
+                      />
+                      <div className="row">
+                        <button className="btn small primary full" onClick={() => mergeImportSlot(slot)} title="Garde les modèles déjà sur la grille et ajoute celui-ci à la suite">
+                          ＋ Ajouter {i === 0 ? "" : `#${i + 1}`} ↗
+                        </button>
+                      </div>
+                      {slot.msg && <p className="msg">{slot.msg}</p>}
+                      <div className="examples">
+                        <span>ex :</span>
+                        <button onClick={() => updateSlot(slot.id, { source: EXAMPLE_PRISMA, msg: "" })}>Prisma</button>
+                        <button onClick={() => updateSlot(slot.id, { source: EXAMPLE_DRIZZLE, msg: "" })}>Drizzle</button>
+                        <button onClick={() => updateSlot(slot.id, { source: EXAMPLE_SQL, msg: "" })}>SQL</button>
+                        <button onClick={() => { fileTarget.current = slot.id; textFileRef.current?.click(); }}>Fichier…</button>
+                      </div>
+                    </>
+                  )}
+                </div>
+              );
+            })}
+            <input ref={textFileRef} type="file" accept=".sql,.prisma,.ts,.txt" hidden onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (f && fileTarget.current) loadTextIntoSlot(f, fileTarget.current);
+              e.target.value = "";
+            }} />
+            {parseMsg && <p className="msg">{parseMsg}</p>}
+
+            <h4>Modèles de base — 0X /</h4>
+            <div className="row">
+              <button className="btn small primary full" onClick={() => setShowGallery(true)}>+ Voir les 6 modèles ↗</button>
+            </div>
+
+            <h4>Diagnostic +</h4>
+            <div className="issues">
+              {issues.length === 0 && <div className="issue ok">✓ Aucun problème : PK ok, liens résolus.</div>}
+              {issues.slice(0, 8).map((it, i) => (
+                <div key={i} className={`issue ${it.level === "err" ? "err" : ""}`}>
+                  <span className="tag">{it.level === "err" ? "ERR" : "WARN"}</span>{it.text}
+                </div>
+              ))}
+              {issues.length > 8 && <p className="muted">+ {issues.length - 8} autre(s)…</p>}
+            </div>
+
+            <div className="help">
+              <p><b>Astuces —</b></p>
+              <ul>
+                <li>Glisse les tables, <code>molette</code> = zoom vers le curseur, <code>F</code> = cadrer, <code>M</code> = plein écran, <code>Esc</code> = fermer.</li>
+                <li><code>Ctrl+Z</code> / <code>Ctrl+Y</code> = annuler / rétablir.</li>
+                <li><code>⇄ Relier</code> : clique 2 entités sur le canvas pour les lier.</li>
+                <li>Les <code>xxx_id</code> + <code>REFERENCES</code> créent les liens auto.</li>
+                <li>Sauvegarde locale automatique.</li>
+              </ul>
+              <button className="btn small" onClick={() => fileRef.current?.click()}>Importer JSON…</button>
+              <button className="btn small" onClick={() => setTour({ active: true, step: 0 })} title="Revoir la visite guidée">? Visite</button>
+              <input ref={fileRef} type="file" accept=".json" hidden onChange={(e) => {
+                const f = e.target.files?.[0]; if (f) loadJSONFile(f); e.target.value = "";
+              }} />
+            </div>
+          </aside>
         )}
         <input
           type="file" accept=".sql,.prisma,.ts,.txt" hidden ref={textFileRef}
