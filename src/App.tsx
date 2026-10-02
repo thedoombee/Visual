@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { Dispatch, SetStateAction } from "react";
 import type { DBModel, DBRelation, DBTable, ImportSlot } from "./types";
 import { uid } from "./types";
 import { parseAuto } from "./parsers";
@@ -18,12 +19,13 @@ import {
   mergeModel,
   moveTableIn,
   removeRelation,
+  removeSlotTables,
   removeTable,
   renameTableIn,
   slotTableCounts,
   suggestFromField as suggestFromFieldOf,
   suggestToField as suggestToFieldOf,
-  untagSlotTables,
+  tagUntaggedTables,
   updateFieldIn,
   updateRelationCards,
   validateModel,
@@ -49,14 +51,18 @@ import { RightPanel } from "./components/RightPanel";
 import { CanvasView } from "./components/CanvasView";
 import { exportSVGString as buildExportSVG } from "./domain/exportSvg";
 
+// Workspace = tout ce que le Ctrl+Z doit restaurer d'un coup : le canvas
+// (model) ET les modèles du panneau gauche (slots).
+interface Workspace {
+  model: DBModel;
+  slots: ImportSlot[];
+}
+
 export default function App() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [showLeft, setShowLeft] = useState(true);
   const [showRight, setShowRight] = useState(true);
   const [parseMsg, setParseMsg] = useState("");
-  // Modèles importés : autant que tu veux, chacun pliable/dépliable,
-  // chacun avec son propre texte + message. Persistés en local.
-  const [slots, setSlots] = useState<ImportSlot[]>(() => loadSlots());
   const [focusMode, setFocusMode] = useState(false);
   const [exportView, setExportView] = useState<null | "sql" | "prisma" | "drizzle" | "json">(null);
   const [showGallery, setShowGallery] = useState(false);
@@ -67,17 +73,60 @@ export default function App() {
   // Repeinture live des liens pendant un drag : accès direct au nœud monde.
   const worldRef = useRef<HTMLDivElement | null>(null);
 
-  // ---------- history (undo / redo) ----------
+  // Modèles importés : autant que tu veux, chacun pliable/dépliable,
+  // chacun avec son propre texte + message. Persistés en local.
+  // Un seul historique pour tout le workspace : un Ctrl+Z après une
+  // suppression fait revenir les tables sur la grille ET l'entrée du panneau.
+  // Les retouches du panneau (texte, nom, plié, masqué) passent par `setSlots`
+  // (sans pas d'historique) ; les changements structurels (ajout,
+  // suppression) passent par `applyWorkspace` (avec historique).
   const {
-    present: model,
-    setPresent: setModel,
-    apply,
-    commit: commitHistory,
+    present: workspace,
+    setPresent: setWorkspace,
+    apply: applyWorkspace,
+    commit: commitWorkspace,
     undo,
     redo,
     canUndo,
     canRedo,
-  } = useHistory<DBModel>(initialModel);
+  } = useHistory<Workspace>(() => {
+    const ss = loadSlots();
+    let m = initialModel();
+    // Migration des stockages enregistrés quand le modèle de base n'était
+    // pas tagué : aucune table rattachée mais des tables orphelines sur le
+    // canvas → elles appartiennent au premier modèle du panneau gauche.
+    // (StrictMode-clean : calcul pur dans l'initialiseur, aucun effet ici.)
+    if (m.tables.length && m.tables.every((t) => !t.slotId) && ss.length) {
+      m = tagUntaggedTables(m, ss[0].id);
+    }
+    return { model: m, slots: ss };
+  });
+  const model = workspace.model;
+  const slots = workspace.slots;
+
+  /** Pousse modèle + slots d'un coup (un seul pas d'historique). */
+  const apply = useCallback((next: DBModel | ((prev: DBModel) => DBModel)) => {
+    applyWorkspace((w) => ({
+      ...w,
+      model: typeof next === "function" ? (next as (p: DBModel) => DBModel)(w.model) : next,
+    }));
+  }, [applyWorkspace]);
+
+  /** Remplacement direct du modèle, SANS pas d'historique (drag). */
+  const setModel: Dispatch<SetStateAction<DBModel>> = useCallback((action: SetStateAction<DBModel>) => {
+    setWorkspace((w) => ({
+      ...w,
+      model: typeof action === "function" ? (action as (p: DBModel) => DBModel)(w.model) : action,
+    }));
+  }, [setWorkspace]);
+
+  /** Retouches du panneau (texte, nom, plié, masqué), SANS pas d'historique. */
+  const setSlots: Dispatch<SetStateAction<ImportSlot[]>> = useCallback((action: SetStateAction<ImportSlot[]>) => {
+    setWorkspace((w) => ({
+      ...w,
+      slots: typeof action === "function" ? (action as (p: ImportSlot[]) => ImportSlot[])(w.slots) : action,
+    }));
+  }, [setWorkspace]);
 
   const selected = useMemo(
     () => model.tables.find((t) => t.id === selectedId) ?? null,
@@ -118,15 +167,17 @@ export default function App() {
 
   const updateSlot = useCallback((id: string, patch: Partial<ImportSlot>) => {
     setSlots((ss) => ss.map((s) => (s.id === id ? { ...s, ...patch } : s)));
-  }, []);
+  }, [setSlots]);
+  // Ajout structurel (avec pas d'historique) : un Ctrl+Z retire le slot créé.
   const addSlot = useCallback((name?: string, source?: string) => {
     const id = uid("slot");
     const n = slots.length + 1;
-    setSlots((ss) => [...ss.map((s) => ({ ...s, collapsed: true })), {
+    const slot: ImportSlot = {
       id, name: name?.trim() || `Modèle ${n}`, source: source ?? "", collapsed: false, msg: "",
-    }]);
+    };
+    applyWorkspace((w) => ({ ...w, slots: [...w.slots.map((s) => ({ ...s, collapsed: true })), slot] }));
     return id;
-  }, [slots.length]);
+  }, [applyWorkspace, slots.length]);
   // Formulaire "modèle perso" de la galerie : crée un vrai slot du panneau gauche.
   const [customName, setCustomName] = useState("");
   const [customSource, setCustomSource] = useState("");
@@ -140,12 +191,19 @@ export default function App() {
     setParseMsg("Modèle perso ajouté au panneau gauche : plie/déplie, puis ＋ Ajouter.");
   }, [customName, customSource, addSlot]);
   const deleteSlot = useCallback((id: string) => {
-    setSlots((ss) => ss.filter((s) => s.id !== id));
-    // Les tables du modèle redeviennent "sans modèle" : toujours visibles.
-    if (model.tables.some((t) => t.slotId === id)) {
-      apply((m) => untagSlotTables(m, id));
+    const doomed = model.tables.filter((t) => t.slotId === id);
+    // Atomique : UN seul pas d'historique retire le slot ET ses tables —
+    // un Ctrl+Z fait donc revenir les deux ensemble.
+    applyWorkspace((w) => ({
+      slots: w.slots.filter((s) => s.id !== id),
+      model: removeSlotTables(w.model, id),
+    }));
+    // La suppression d'un modèle retire ses tables + leurs liens du canvas.
+    if (doomed.length) {
+      if (selectedId && doomed.some((t) => t.id === selectedId)) setSelectedId(null);
+      setParseMsg(`Modèle supprimé : ${doomed.length} table(s) retirée(s) du canvas. (Ctrl+Z pour annuler)`);
     }
-  }, [apply, model]);
+  }, [applyWorkspace, model, selectedId]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -357,18 +415,26 @@ export default function App() {
   }, [linkFromId, model, apply, suggestFromField, suggestToField]);
 
   // ---------- galerie : un modèle choisi S'AJOUTE aux autres (jamais de remplacement) ----------
-  // Il rejoint le canvas (à droite) + un slot du panneau gauche.
+  // Il rejoint le canvas (à droite) + un slot du panneau gauche, en UN seul
+  // pas d'historique (un Ctrl+Z retire les tables ET le slot ensemble).
   const loadStarter = useCallback((pack: StarterPack) => {
     const parsed = parseAuto(pack.sql).model;
     const name = `${pack.numero} · ${pack.titre}`;
-    const slotId = addSlot(name, pack.sql);
-    const ids = mergeParsed(parsed, slotId);
-    updateSlot(slotId, { msg: `Ajouté : ${parsed.tables.length} table(s) sur le canvas.` });
+    const slotId = uid("slot");
+    const slot: ImportSlot = {
+      id: slotId, name, source: pack.sql, collapsed: true,
+      msg: `Ajouté : ${parsed.tables.length} table(s) sur le canvas.`,
+    };
+    const { model: merged, ids } = mergeModel(model, parsed, slotId);
+    applyWorkspace({
+      model: merged,
+      slots: [...slots.map((s) => ({ ...s, collapsed: true })), slot],
+    });
     setSelectedId(ids[0] ?? null);
     setParseMsg(`« ${name} » ajouté aux modèles présents.`);
     setShowGallery(false);
     camera.fitViewSoon();
-  }, [mergeParsed, addSlot, updateSlot, camera]);
+  }, [applyWorkspace, model, slots, camera]);
 
   // ---------- layout / camera ----------
   const autoLayout = useCallback(() => {
@@ -386,7 +452,7 @@ export default function App() {
     const z = camera.cam.z;
     const sx0 = e.clientX, sy0 = e.clientY;
     let tx = 0, ty = 0, moved = false;
-    const snapshot = model; // état avant déplacement, pour un seul pas d'historique
+    const snapshot = workspace; // état avant déplacement, pour un seul pas d'historique
     // Liens touchés par cette table : on garde les nœuds SVG + coords de base
     // pour redessiner courbes, pastilles et cardinalités EN DIRECT (zéro render).
     interface LiveEdge {
@@ -455,7 +521,7 @@ export default function App() {
       cardEl.style.transform = "";
       if (!moved) return;
       moveTable(t.id, Math.round(t.x + tx), Math.round(t.y + ty));
-      commitHistory(snapshot);
+      commitWorkspace(snapshot);
     };
     window.addEventListener("mousemove", move);
     window.addEventListener("mouseup", up);

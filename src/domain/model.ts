@@ -86,6 +86,33 @@ export function untagSlotTables(model: DBModel, slotId: string): DBModel {
   };
 }
 
+/** Supprime les tables d'un slot + les liens qui les touchent (suppression modèle). */
+export function removeSlotTables(model: DBModel, slotId: string): DBModel {
+  const gone = model.tables.filter((t) => t.slotId === slotId);
+  if (!gone.length) return model;
+  const goneNames = new Set(gone.map((t) => t.name));
+  return {
+    tables: model.tables.filter((t) => t.slotId !== slotId),
+    relations: model.relations.filter(
+      (r) => !goneNames.has(r.fromTable) && !goneNames.has(r.toTable)
+    ),
+  };
+}
+
+/**
+ * Migration des stockages cassés (tables du modèle de base sans `slotId`) :
+ * rattache les tables orphelines au slot donné. Les tables déjà taguées
+ * et les tables manuelles post-migration ne sont pas concernées quand
+ * l'appelant ne l'applique qu'aux modèles 100 % orphelins.
+ */
+export function tagUntaggedTables(model: DBModel, slotId: string): DBModel {
+  if (!model.tables.some((t) => !t.slotId)) return model;
+  return {
+    ...model,
+    tables: model.tables.map((t) => (t.slotId ? t : { ...t, slotId })),
+  };
+}
+
 // ---------- fields ----------
 
 export function updateFieldIn(
