@@ -1,5 +1,6 @@
 import type { DBModel, DBRelation, DBTable } from "./types";
 import { uid } from "./types";
+import { guessFkTarget, withInferredCards } from "./domain/model";
 
 export type SchemaKind = "prisma" | "drizzle" | "sql" | "unknown";
 
@@ -116,7 +117,7 @@ export function parsePrisma(input: string): DBModel {
   for (const t of tables) {
     for (const f of t.fields) {
       if (f.fk) continue;
-      const cand = guessTarget(f.name, [...modelNames].map(toSnake));
+      const cand = guessFkTarget(f.name, [...modelNames].map(toSnake));
       if (cand && cand !== t.name) {
         const target = byName.get(cand);
         const toField = target?.fields.find((x) => x.pk)?.name ?? "id";
@@ -133,7 +134,7 @@ export function parsePrisma(input: string): DBModel {
     }
   }
 
-  return { tables: layout(tables), relations };
+  return { tables: layout(tables), relations: withInferredCards(tables, relations) };
 }
 
 function extractMap(body: string): string | null {
@@ -161,23 +162,6 @@ function mapPrismaType(t: string): string {
     Bytes: "BYTEA",
   };
   return m[t] ?? t.toUpperCase();
-}
-
-function guessTarget(fieldName: string, tableNames: string[]): string | null {
-  const n = fieldName.toLowerCase();
-  for (const t of tableNames) {
-    const sing = t.endsWith("s") ? t.slice(0, -1) : t;
-    if (n === `${sing}_id` || n === `${sing}id` || n === `${t}_id` || n === `${t}id`)
-      return t;
-    if (n === "author_id" && (t === "users" || t === "user")) return t;
-  }
-  // heuristique : xxx_id -> xxx + s?
-  if (n.endsWith("_id")) {
-    const base = n.slice(0, -3);
-    if (tableNames.includes(base)) return base;
-    if (tableNames.includes(base + "s")) return base + "s";
-  }
-  return null;
 }
 
 // ---------------- DRIZZLE ----------------
@@ -242,7 +226,7 @@ export function parseDrizzle(input: string): DBModel {
     tables.push({ id: uid("t"), name: def.sqlName, fields });
   }
 
-  return { tables: layout(tables), relations };
+  return { tables: layout(tables), relations: withInferredCards(tables, relations) };
 }
 
 function mapDrizzleType(fn: string, expr: string): string {
@@ -389,7 +373,10 @@ export function parseSQL(input: string): DBModel {
     }
     tables.push({ id: uid("t"), name: tname, fields });
   }
-  return { tables: layout(tables), relations };
+  // Les cartes dépendent de nullable/unique (+ PK composites ci-dessus) :
+  // on les (ré)infère en passe finale plutôt qu'en dur à chaque push.
+  const inferred = withInferredCards(tables, relations);
+  return { tables: layout(tables), relations: inferred };
 }
 
 function cleanId(s: string): string {

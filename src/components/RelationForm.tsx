@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import type { DBModel } from "../types";
 import { MCD_CARDS } from "../types";
+import { inferCardsFor } from "../domain/model";
 
 export interface RelFormState {
   fromTable: string;
@@ -30,16 +31,31 @@ export function RelationForm({ model, form, setForm, onAdd, preset, suggestFrom,
   }, [preset]);
   const srcFields = model.tables.find((t) => t.name === form.fromTable)?.fields ?? [];
   const dstFields = model.tables.find((t) => t.name === form.toTable)?.fields ?? [];
-  const pickSrcTable = (name: string) => setForm({
-    ...form, fromTable: name,
-    fromField: name ? suggestFrom(name, form.toTable) : "",
-  });
-  const pickDstTable = (name: string) => setForm({
-    ...form, toTable: name,
-    toField: name ? suggestTo(name) : "",
-    // Re-suggère le champ source qui vise cette entité (xxx_id)
-    fromField: form.fromTable ? suggestFrom(form.fromTable, name) : form.fromField,
-  });
+  const pickSrcTable = (name: string) => {
+    const fromField = name ? suggestFrom(name, form.toTable) : "";
+    const cards = fromField ? inferCardsFor(model.tables, name, fromField) : null;
+    setForm({
+      ...form, fromTable: name, fromField,
+      ...(cards ? { cardA: cards.fromCard, cardB: cards.toCard } : null),
+    });
+  };
+  const pickSrcField = (name: string) => {
+    const cards = name ? inferCardsFor(model.tables, form.fromTable, name) : null;
+    setForm({
+      ...form, fromField: name,
+      ...(cards ? { cardA: cards.fromCard, cardB: cards.toCard } : null),
+    });
+  };
+  const pickDstTable = (name: string) => {
+    const toField = name ? suggestTo(name) : "";
+    const fromField = form.fromTable ? suggestFrom(form.fromTable, name) : form.fromField;
+    // Re-suggère le champ source qui vise cette entité (xxx_id) + ses cartes Merise.
+    const cards = fromField ? inferCardsFor(model.tables, form.fromTable, fromField) : null;
+    setForm({
+      ...form, toTable: name, toField, fromField,
+      ...(cards ? { cardA: cards.fromCard, cardB: cards.toCard } : null),
+    });
+  };
   return (
     <div className="relform">
       <label className="lbl">Entité source (porteuse du lien)</label>
@@ -48,7 +64,7 @@ export function RelationForm({ model, form, setForm, onAdd, preset, suggestFrom,
         {model.tables.map((t) => <option key={t.id} value={t.name}>{t.name}</option>)}
       </select>
       <label className="lbl">Champ source</label>
-      <select value={form.fromField} onChange={(e) => setForm({ ...form, fromField: e.target.value })}>
+      <select value={form.fromField} onChange={(e) => pickSrcField(e.target.value)}>
         <option value="">— choisir —</option>
         {srcFields.map((f) => <option key={f.id} value={f.name}>{f.name} · {f.type}</option>)}
       </select>

@@ -14,6 +14,7 @@ import {
   deleteFieldFrom,
   duplicateTable as duplicateTableOf,
   hiddenSlotIdsOf,
+  inferCardsFor,
   insertTable,
   isDuplicateRelation,
   mergeModel,
@@ -25,6 +26,7 @@ import {
   slotTableCounts,
   suggestFromField as suggestFromFieldOf,
   suggestToField as suggestToFieldOf,
+  syncSlotTables,
   tagUntaggedTables,
   updateFieldIn,
   updateRelationCards,
@@ -261,26 +263,39 @@ export default function App() {
   // ---------- import ----------
   // Ajout générique : parse un schema et l'ajoute à droite du canvas.
   // Chaque table importée est taguée avec le slot d'origine (visibilité par modèle).
-  // Retourne les ids des tables ajoutées.
-  const mergeParsed = useCallback((parsed: DBModel, slotId?: string): string[] => {
-    const { model: merged, ids } = mergeModel(model, parsed, slotId);
-    apply(merged);
-    return ids;
-  }, [apply, model]);
 
   // Ajoute CE modèle au canvas sans effacer ceux déjà présents.
+  // Si le slot a déjà des tables sur la grille → sync stricte (Modifier) :
+  // champs fusionnés par nom (positions conservées), tables ajoutées/retirées,
+  // liens internes remplacés, FK croisées re-détectées. Sinon ajout classique.
   const mergeImportSlot = useCallback((slot: ImportSlot) => {
     const { model: m, kind: k } = parseAuto(slot.source);
     if (!m.tables.length) {
       updateSlot(slot.id, { msg: "Aucune table détectée. Vérifie ton schema (CREATE TABLE / model / pgTable)." });
       return;
     }
-    const ids = mergeParsed(m, slot.id);
+    const alreadyOnCanvas = model.tables.filter((t) => t.slotId === slot.id).length;
+    if (alreadyOnCanvas > 0) {
+      const { model: synced, ids, stats } = syncSlotTables(model, m, slot.id);
+      applyWorkspace((w) => ({ ...w, model: synced }));
+      setSelectedId(ids[0] ?? null);
+      const bits: string[] = [];
+      if (stats.updated) bits.push(`~ ${stats.updated} maj`);
+      if (stats.added) bits.push(`+ ${stats.added} table(s)`);
+      if (stats.removed) bits.push(`- ${stats.removed} retirée(s)`);
+      if (stats.autoLinked) bits.push(`⇄ ${stats.autoLinked} lien(s) auto`);
+      updateSlot(slot.id, { msg: `Modifié : ${bits.join(" · ") || "rien à changer"} [${k}].` });
+      setParseMsg(`« ${slot.name} » mis à jour (${bits.join(", ") || "à jour"}). Positions et liens manuels conservés.`);
+      camera.fitViewSoon();
+      return;
+    }
+    const { model: merged, ids, autoLinked } = mergeModel(model, m, slot.id);
+    applyWorkspace((w) => ({ ...w, model: merged }));
     setSelectedId(ids[0] ?? null);
-    updateSlot(slot.id, { msg: `+ ${m.tables.length} table(s) ajoutée(s) [${k}].` });
-    setParseMsg(`« ${slot.name} » ajouté : relie ses entités à la main avec leurs cardinalités MCD.`);
+    updateSlot(slot.id, { msg: `+ ${m.tables.length} table(s) ajoutée(s) [${k}]${autoLinked ? ` · ⇄ ${autoLinked} lien(s) auto.` : "."}` });
+    setParseMsg(`« ${slot.name} » ajouté${autoLinked ? ` : ${autoLinked} lien(s) FK détecté(s) vers les tables présentes` : " : relie ses entités à la main avec leurs cardinalités MCD"}.`);
     camera.fitViewSoon();
-  }, [mergeParsed, updateSlot, camera]);
+  }, [applyWorkspace, model, updateSlot, camera]);
 
   // ---------- tables ----------
   const addTable = useCallback(() => {
@@ -376,7 +391,7 @@ export default function App() {
   }, [apply]);
 
   // Clic-clic sur le canvas en mode liaison : source puis cible.
-  // Champs suggérés (xxx_id → PK), cardinalités MCD par défaut 1,N — 1,1.
+  // Champs suggérés (xxx_id → PK), cardinalités MCD inférées (nullable/unique).
   const handleLinkClick = useCallback((t: DBTable) => {
     if (!linkFromId) {
       setLinkFromId(t.id);
@@ -395,10 +410,11 @@ export default function App() {
       setLinkFromId(null);
       return;
     }
+    const { fromCard, toCard } = inferCardsFor(model.tables, src.name, fromField);
     const rel: DBRelation = {
       id: uid("rel"),
       fromTable: src.name, fromField, toTable: t.name, toField,
-      fromCard: "1,N", toCard: "1,1",
+      fromCard, toCard,
     };
     const dup = isDuplicateRelation(
       model.relations, rel.fromTable, rel.fromField, rel.toTable, rel.toField
@@ -409,7 +425,7 @@ export default function App() {
       return;
     }
     apply((m) => addRelationTo(m, rel));
-    setParseMsg(`Lié : ${src.name}.${fromField} (1,N) — ${t.name}.${toField} (1,1). Modifie les cardinalités dans Édition.`);
+    setParseMsg(`Lié : ${src.name}.${fromField} (${rel.fromCard}) — ${t.name}.${toField} (${rel.toCard}). Modifie les cardinalités dans Édition.`);
     setSelectedId(src.id);
     setLinkFromId(null); // le mode reste actif pour enchaîner
   }, [linkFromId, model, apply, suggestFromField, suggestToField]);
@@ -421,17 +437,17 @@ export default function App() {
     const parsed = parseAuto(pack.sql).model;
     const name = `${pack.numero} · ${pack.titre}`;
     const slotId = uid("slot");
+    const { model: merged, ids, autoLinked } = mergeModel(model, parsed, slotId);
     const slot: ImportSlot = {
       id: slotId, name, source: pack.sql, collapsed: true,
-      msg: `Ajouté : ${parsed.tables.length} table(s) sur le canvas.`,
+      msg: `Ajouté : ${parsed.tables.length} table(s) sur le canvas${autoLinked ? ` · ⇄ ${autoLinked} lien(s) auto` : ""}.`,
     };
-    const { model: merged, ids } = mergeModel(model, parsed, slotId);
     applyWorkspace({
       model: merged,
       slots: [...slots.map((s) => ({ ...s, collapsed: true })), slot],
     });
     setSelectedId(ids[0] ?? null);
-    setParseMsg(`« ${name} » ajouté aux modèles présents.`);
+    setParseMsg(`« ${name} » ajouté aux modèles présents${autoLinked ? ` (${autoLinked} lien(s) FK auto)` : ""}.`);
     setShowGallery(false);
     camera.fitViewSoon();
   }, [applyWorkspace, model, slots, camera]);
