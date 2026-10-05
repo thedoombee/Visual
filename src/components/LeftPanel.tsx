@@ -82,9 +82,18 @@ export function LeftPanel(p: LeftPanelProps) {
                   spellCheck={false}
                 />
                 <div className="row">
-                  <button className="btn small primary full" onClick={() => p.onMergeSlot(slot)} title="Garde les modèles déjà sur la grille et ajoute celui-ci à la suite">
-                    ＋ Ajouter {i === 0 ? "" : `#${i + 1}`} ↗
-                  </button>
+                  {(() => {
+                    const n = p.slotTableCount.get(slot.id) ?? 0;
+                    return n > 0 ? (
+                      <button className="btn small primary full" onClick={() => p.onMergeSlot(slot)} title="Re-synchronise ce modèle sur le canvas : champs fusionnés, tables ajoutées/retirées, FK auto">
+                        ⟳ Modifier {i === 0 ? "" : `#${i + 1}`} ↗
+                      </button>
+                    ) : (
+                      <button className="btn small primary full" onClick={() => p.onMergeSlot(slot)} title="Garde les modèles déjà sur la grille et ajoute celui-ci à la suite">
+                        ＋ Ajouter {i === 0 ? "" : `#${i + 1}`} ↗
+                      </button>
+                    );
+                  })()}
                 </div>
                 {slot.msg && <p className="msg">{slot.msg}</p>}
                 <div className="examples">
