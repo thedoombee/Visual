@@ -1,37 +1,17 @@
 import { useState } from "react";
 import type { ShareKind } from "../services/share";
-import type { PublishResult } from "../services/publish";
 
 interface ShareModalProps {
   kind: ShareKind;
   targetName: string;
-  /** URL locale figée (après clic "Créer le lien"). Ne sort pas de ta machine. */
+  /** URL figée (après clic "Créer le lien"). Mondiale une fois l'app hébergée. */
   url: string;
   onCreate: () => void;
-  /** Publie le schéma en image sur un hébergeur public → URL mondiale. */
-  onPublishWorldwide: () => Promise<PublishResult>;
   onClose: () => void;
 }
 
 export function ShareModal(p: ShareModalProps) {
   const [copied, setCopied] = useState(false);
-  const [pubBusy, setPubBusy] = useState(false);
-  const [pub, setPub] = useState<PublishResult | null>(null);
-  const [pubError, setPubError] = useState("");
-  const [pubCopied, setPubCopied] = useState(false);
-
-  const publish = async () => {
-    setPubBusy(true);
-    setPubError("");
-    setPub(null);
-    try {
-      setPub(await p.onPublishWorldwide());
-    } catch (e) {
-      setPubError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setPubBusy(false);
-    }
-  };
 
   return (
     <div className="modal-bg" onClick={p.onClose}>
@@ -68,47 +48,12 @@ export function ShareModal(p: ShareModalProps) {
                 <a className="btn" href={p.url} target="_blank" rel="noreferrer">Ouvrir ↗</a>
               </div>
               <p className="muted">
-                Ce lien contient TOUT le schéma mais reste sur l'adresse de l'app :
-                sur ton PC c'est du <code>localhost</code>, donc il ne s'ouvre que chez toi.
-                Pour un lien mondial, publie ci-dessous — ou héberge l'app (Vercel /
-                Netlify, gratuit) et ce même lien marchera partout, en interactif.
+                Ce lien contient TOUT le schéma et s'ouvre sur l'adresse de l'app :
+                hébergée, il marche partout dans le monde en interactif ; en
+                <code>localhost</code>, il ne s'ouvre que sur ton PC.
               </p>
             </>
           )}
-
-          <div className="publish-box">
-            <span className="lbl">🌍 Lien public mondial (ouvre-toi partout, sans ton PC)</span>
-            <p className="muted">
-              Publie le schéma en image sur un hébergeur public gratuit, sans compte.
-              N'importe qui dans le monde verra ton MCD. Ton original reste inchangé.
-            </p>
-            {!pub ? (
-              <button className="btn primary full" onClick={publish} disabled={pubBusy}>
-                {pubBusy ? "Publication en cours… (envoi de l'image)" : "🌍 Publier « " + p.targetName + " » en ligne"}
-              </button>
-            ) : (
-              <>
-                <div className="row">
-                  <input value={pub.url} readOnly onFocus={(e) => e.target.select()} title="Lien public mondial" />
-                </div>
-                <div className="row">
-                  <button
-                    className="btn primary"
-                    onClick={() => {
-                      void navigator.clipboard.writeText(pub.url);
-                      setPubCopied(true);
-                      setTimeout(() => setPubCopied(false), 1800);
-                    }}
-                  >
-                    {pubCopied ? "✓ Copié !" : "Copier le lien mondial"}
-                  </button>
-                  <a className="btn" href={pub.url} target="_blank" rel="noreferrer">Ouvrir ↗</a>
-                </div>
-                <p className="muted">Hébergé chez {pub.host} · {pub.retention}. Pour un nouveau lien frais, re-publie.</p>
-              </>
-            )}
-            {pubError && <p className="msg warn">{pubError}</p>}
-          </div>
         </div>
       </div>
     </div>
