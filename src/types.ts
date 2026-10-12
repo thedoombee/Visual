@@ -60,6 +60,21 @@ export interface ImportSlot {
   collapsed: boolean;
   msg: string;
   hidden?: boolean; // modèle masqué sur le canvas
+  // Instance parente (projet). Absent = modèle hors instance, toujours groupé
+  // dans "Sans instance" mais visible selon son propre `hidden`.
+  instanceId?: string;
+}
+
+// Une instance = un projet qui regroupe plusieurs modèles (slots).
+// Masquer une instance masque tous ses modèles d'un coup, sans toucher aux
+// autres projets. Extension ouverte : on ajoute des champs sans casser les
+// sauvegardes existantes (tout est optionnel sauf id/name).
+export interface Instance {
+  id: string;
+  name: string;
+  collapsed: boolean;
+  hidden?: boolean;
+  color?: string;
 }
 
 export const uid = (p = "id") =>

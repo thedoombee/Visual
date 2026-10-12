@@ -1,19 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Dispatch, SetStateAction } from "react";
-import type { DBModel, DBRelation, DBTable, ImportSlot } from "./types";
+import type { DBModel, DBRelation, DBTable, ImportSlot, Instance } from "./types";
 import { uid } from "./types";
 import { parseAuto } from "./parsers";
-import { toDrizzle, toPrisma, toSQL } from "./generators";
 import { type StarterPack } from "./templates";
 import { CARD_W, edgePath, fieldY } from "./domain/geometry";
 import {
   addFieldTo,
   addRelationTo,
-  autoLayoutModel,
   createTable,
   deleteFieldFrom,
   duplicateTable as duplicateTableOf,
-  hiddenSlotIdsOf,
   inferCardsFor,
   insertTable,
   isDuplicateRelation,
@@ -35,10 +32,37 @@ import {
   visibleTablesOf,
 } from "./domain/model";
 import {
+  assignSlotToInstance,
+  createInstance,
+  detachInstanceSlots,
+  effectiveHiddenSlotIds,
+  renameInstance,
+  slotsOfInstance,
+  subModelForInstance,
+  subModelForSlot,
+  toggleInstanceCollapsed,
+  toggleInstanceHidden,
+} from "./domain/instances";
+import { layoutInstanceOnly, smartLayoutModel } from "./domain/layout";
+import { getExporter, safeFileName } from "./domain/exporters";
+import { downloadBlob, makeZipBlob } from "./domain/zip";
+import {
+  buildShareUrl,
+  parseShareFromHash,
+  type ShareKind,
+  type ShareSnapshot,
+} from "./services/share";
+import { publishWorldwide, type PublishResult } from "./services/publish";
+import {
   initialModel,
+  INSTANCES_KEY,
+  loadInstances,
   loadSlots,
+  saveInstances,
   saveModel,
   saveSlots,
+  SLOTS_KEY,
+  STORE_KEY,
 } from "./services/storage";
 import { useHistory } from "./hooks/useHistory";
 import { useCamera } from "./hooks/useCamera";
@@ -46,7 +70,8 @@ import { useTour } from "./hooks/useTour";
 import { CommandBar } from "./components/CommandBar";
 import { StatusBar } from "./components/StatusBar";
 import { TourOverlay } from "./components/TourOverlay";
-import { ExportModal } from "./components/ExportModal";
+import { ExportModal, type ExportScope } from "./components/ExportModal";
+import { ShareModal } from "./components/ShareModal";
 import { GalleryModal } from "./components/GalleryModal";
 import { LeftPanel } from "./components/LeftPanel";
 import { RightPanel } from "./components/RightPanel";
@@ -54,10 +79,11 @@ import { CanvasView } from "./components/CanvasView";
 import { exportSVGString as buildExportSVG } from "./domain/exportSvg";
 
 // Workspace = tout ce que le Ctrl+Z doit restaurer d'un coup : le canvas
-// (model) ET les modèles du panneau gauche (slots).
+// (model), les modèles du panneau gauche (slots) ET les instances (projets).
 interface Workspace {
   model: DBModel;
   slots: ImportSlot[];
+  instances: Instance[];
 }
 
 export default function App() {
@@ -66,8 +92,22 @@ export default function App() {
   const [showRight, setShowRight] = useState(true);
   const [parseMsg, setParseMsg] = useState("");
   const [focusMode, setFocusMode] = useState(false);
-  const [exportView, setExportView] = useState<null | "sql" | "prisma" | "drizzle" | "json">(null);
+  const [exportOpen, setExportOpen] = useState(false);
+  const [exportFormat, setExportFormat] = useState("sql");
+  const [exportScope, setExportScope] = useState<ExportScope>({ kind: "canvas" });
   const [showGallery, setShowGallery] = useState(false);
+  const [shareTarget, setShareTarget] = useState<null | { kind: ShareKind; id?: string; name: string }>(null);
+  const [shareUrl, setShareUrl] = useState("");
+  // Aperçu partagé (lien #partage=…) : snapshot figé, lecture seule d'origine,
+  // modifiable/exportable en copie locale, persistance désactivée.
+  const [sharedSnap] = useState<ShareSnapshot | null>(() => {
+    try {
+      return parseShareFromHash();
+    } catch {
+      return null;
+    }
+  });
+  const isSharedView = !!sharedSnap;
   const [savedAt, setSavedAt] = useState("");
   const [query, setQuery] = useState("");
   const fileRef = useRef<HTMLInputElement>(null);
@@ -92,7 +132,11 @@ export default function App() {
     canUndo,
     canRedo,
   } = useHistory<Workspace>(() => {
+    if (sharedSnap) {
+      return { model: sharedSnap.model, slots: sharedSnap.slots, instances: sharedSnap.instances };
+    }
     const ss = loadSlots();
+    const ii = loadInstances();
     let m = initialModel();
     // Migration des stockages enregistrés quand le modèle de base n'était
     // pas tagué : aucune table rattachée mais des tables orphelines sur le
@@ -101,10 +145,11 @@ export default function App() {
     if (m.tables.length && m.tables.every((t) => !t.slotId) && ss.length) {
       m = tagUntaggedTables(m, ss[0].id);
     }
-    return { model: m, slots: ss };
+    return { model: m, slots: ss, instances: ii };
   });
   const model = workspace.model;
   const slots = workspace.slots;
+  const instances = workspace.instances;
 
   /** Pousse modèle + slots d'un coup (un seul pas d'historique). */
   const apply = useCallback((next: DBModel | ((prev: DBModel) => DBModel)) => {
@@ -130,13 +175,22 @@ export default function App() {
     }));
   }, [setWorkspace]);
 
+  /** Retouches instances (nom, plié, masqué, assignation), SANS pas d'historique. */
+  const setInstances: Dispatch<SetStateAction<Instance[]>> = useCallback((action: SetStateAction<Instance[]>) => {
+    setWorkspace((w) => ({
+      ...w,
+      instances: typeof action === "function" ? (action as (p: Instance[]) => Instance[])(w.instances) : action,
+    }));
+  }, [setWorkspace]);
+
   const selected = useMemo(
     () => model.tables.find((t) => t.id === selectedId) ?? null,
     [model, selectedId]
   );
   const byName = useMemo(() => new Map(model.tables.map((t) => [t.name, t])), [model]);
-  // Visibilité par modèle : voir `domain/model.ts` (sélecteurs purs).
-  const hiddenSlotIds = useMemo(() => hiddenSlotIdsOf(slots), [slots]);
+  // Visibilité par modèle ET par instance : voir `domain/instances.ts`.
+  // Masquer une instance masque tous ses modèles ; "Isoler" = une seule visible.
+  const hiddenSlotIds = useMemo(() => effectiveHiddenSlotIds(slots, instances), [slots, instances]);
   const visibleTables = useMemo(
     () => visibleTablesOf(model, hiddenSlotIds),
     [model, hiddenSlotIds]
@@ -147,22 +201,31 @@ export default function App() {
   );
   const slotTableCount = useMemo(() => slotTableCounts(model), [model]);
 
-  const openExport = useCallback((view: "sql" | "prisma" | "drizzle" | "json") => {
-    setExportView(view);
+  const openExport = useCallback(() => {
+    setExportScope({ kind: "canvas" });
+    setExportOpen(true);
   }, []);
 
   useEffect(() => {
+    if (isSharedView) return; // aperçu partagé : on ne touche PAS au stockage local
     const id = setTimeout(() => {
       const saved = saveModel(model);
       if (saved) setSavedAt(saved);
     }, 400);
     return () => clearTimeout(id);
-  }, [model]);
+  }, [model, isSharedView]);
 
   // Persistance des slots d'import (textes + plié/déplié)
   useEffect(() => {
+    if (isSharedView) return;
     saveSlots(slots);
-  }, [slots]);
+  }, [slots, isSharedView]);
+
+  // Persistance des instances (projets)
+  useEffect(() => {
+    if (isSharedView) return;
+    saveInstances(instances);
+  }, [instances, isSharedView]);
 
   // Visite guidée (état + positionnement + persistance "vue").
   const { tour, tourPos, openTour, closeTour, stepTour } = useTour();
@@ -199,6 +262,7 @@ export default function App() {
     applyWorkspace((w) => ({
       slots: w.slots.filter((s) => s.id !== id),
       model: removeSlotTables(w.model, id),
+      instances: w.instances,
     }));
     // La suppression d'un modèle retire ses tables + leurs liens du canvas.
     if (doomed.length) {
@@ -206,6 +270,56 @@ export default function App() {
       setParseMsg(`Modèle supprimé : ${doomed.length} table(s) retirée(s) du canvas. (Ctrl+Z pour annuler)`);
     }
   }, [applyWorkspace, model, selectedId]);
+
+  // ---------- instances (projets) ----------
+  const addInstance = useCallback(() => {
+    const inst = createInstance(instances.map((i) => i.name), instances.length);
+    applyWorkspace((w) => ({
+      ...w,
+      instances: [...w.instances.map((i) => ({ ...i, collapsed: true })), { ...inst, collapsed: false }],
+    }));
+    setParseMsg(`Instance « ${inst.name} » créée : assigne-lui des modèles via « Sans instance… ».`);
+  }, [applyWorkspace, instances]);
+  const renameInstanceCb = useCallback((id: string, name: string) => {
+    setInstances((ii) => renameInstance(ii, id, name));
+  }, [setInstances]);
+  const toggleInstanceHiddenCb = useCallback((id: string) => {
+    setInstances((ii) => toggleInstanceHidden(ii, id));
+  }, [setInstances]);
+  const toggleInstanceCollapsedCb = useCallback((id: string) => {
+    setInstances((ii) => toggleInstanceCollapsed(ii, id));
+  }, [setInstances]);
+  const deleteInstance = useCallback((id: string) => {
+    const name = instances.find((i) => i.id === id)?.name ?? "Instance";
+    applyWorkspace((w) => ({
+      ...w,
+      instances: w.instances.filter((i) => i.id !== id),
+      slots: detachInstanceSlots(w.slots, id),
+    }));
+    setParseMsg(`Instance « ${name} » supprimée : ses modèles sont conservés dans « Sans instance ». (Ctrl+Z pour annuler)`);
+  }, [applyWorkspace, instances]);
+  const assignSlot = useCallback((slotId: string, instanceId?: string) => {
+    setSlots((ss) => assignSlotToInstance(ss, slotId, instanceId));
+  }, [setSlots]);
+  /** Tout ré-afficher : instances + modèles (sortie du mode "un projet à la fois"). */
+  const showAll = useCallback(() => {
+    setInstances((ii) => ii.map((i) => ({ ...i, hidden: false })));
+    setSlots((ss) => ss.map((s) => ({ ...s, hidden: false })));
+    setParseMsg("Tout est visible : instances + modèles ré-affichés.");
+  }, [setInstances, setSlots]);
+  /** Isoler = ne garder qu'une instance visible. Re-clic = tout ré-afficher. */
+  const isolateInstance = useCallback((id: string) => {
+    const othersHidden = instances.filter((i) => i.id !== id).every((i) => i.hidden);
+    const unaffHidden = slots.filter((s) => !s.instanceId).every((s) => s.hidden);
+    if (othersHidden && unaffHidden && !instances.find((i) => i.id === id)?.hidden) {
+      showAll();
+      return;
+    }
+    setInstances((ii) => ii.map((i) => ({ ...i, hidden: i.id === id ? false : true })));
+    setSlots((ss) => ss.map((s) => (!s.instanceId ? { ...s, hidden: true } : s.hidden && s.instanceId === id ? { ...s, hidden: false } : s)));
+    const name = instances.find((i) => i.id === id)?.name ?? "";
+    setParseMsg(`Instance « ${name} » isolée : les autres projets sont masqués. Re-clique « Isoler » pour tout revoir.`);
+  }, [instances, slots, setInstances, setSlots, showAll]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -219,7 +333,8 @@ export default function App() {
         e.preventDefault(); redo(); return;
       }
       if (e.key === "Escape") {
-        if (exportView) { setExportView(null); return; }
+        if (exportOpen) { setExportOpen(false); return; }
+        if (shareTarget) { setShareTarget(null); return; }
         if (showGallery) { setShowGallery(false); return; }
         if (typing) return;
         if (linkModeRef.current) { setLinkMode(false); setLinkFromId(null); }
@@ -227,7 +342,7 @@ export default function App() {
         return;
       }
       if (typing) return;
-      if (exportView || showGallery) return; // modale ouverte : que Echap / undo / redo
+      if (exportOpen || shareTarget || showGallery) return; // modale ouverte : que Echap / undo / redo
       if (e.key === "[") setShowLeft((v) => !v);
       else if (e.key === "]") setShowRight((v) => !v);
       else if (e.key.toLowerCase() === "f") camera.fitView();
@@ -236,7 +351,7 @@ export default function App() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [undo, redo, model, exportView, showGallery]);
+  }, [undo, redo, model, exportOpen, shareTarget, showGallery]);
 
   // ---------- validation ----------
   const issues = useMemo(() => validateModel(model), [model]);
@@ -445,18 +560,31 @@ export default function App() {
     applyWorkspace({
       model: merged,
       slots: [...slots.map((s) => ({ ...s, collapsed: true })), slot],
+      instances,
     });
     setSelectedId(ids[0] ?? null);
     setParseMsg(`« ${name} » ajouté aux modèles présents${autoLinked ? ` (${autoLinked} lien(s) FK auto)` : ""}.`);
     setShowGallery(false);
     camera.fitViewSoon();
-  }, [applyWorkspace, model, slots, camera]);
+  }, [applyWorkspace, model, slots, instances, camera]);
 
   // ---------- layout / camera ----------
-  const autoLayout = useCallback(() => {
-    apply((m) => autoLayoutModel(m));
+  /** Layout intelligent : regroupe par instance / modèle, hubs en premier. */
+  const smartLayout = useCallback(() => {
+    applyWorkspace((w) => ({
+      ...w,
+      model: smartLayoutModel(w.model, { slots: w.slots, instances: w.instances }),
+    }));
     camera.resetCam();
-  }, [apply, camera]);
+    setParseMsg("Canvas rangé par instance : chaque projet est regroupé, tables liées proches.");
+  }, [applyWorkspace, camera]);
+  const layoutInstance = useCallback((id: string) => {
+    applyWorkspace((w) => ({
+      ...w,
+      model: layoutInstanceOnly(w.model, w.slots, id).model,
+    }));
+    camera.fitViewSoon();
+  }, [applyWorkspace, camera]);
 
   // ---------- drag & pan (direct-DOM pendant le geste, commit au relâcher) ----------
   const onCardMouseDown = (e: React.MouseEvent, t: DBTable) => {
@@ -545,38 +673,69 @@ export default function App() {
 
   // Pan du fond : voir `hooks/useCamera.ts` (direct-DOM puis commit).
 
-  // ---------- exports ----------
-  // SQL / Prisma / Drizzle / SVG / PNG = tables visibles uniquement.
-  // JSON = sauvegarde complète (modèles masqués inclus).
-  const exportVisible = useMemo(() => ({
-    tables: visibleTables,
-    relations: visibleRelations,
-  }), [visibleTables, visibleRelations]);
+  // ---------- exports : UN seul bouton, choix du format dans le modal ----------
+  // Périmètre = canvas visible | instance | modèle. Le ZIP d'instance contient
+  // un fichier par modèle dans le format choisi (via le registre d'exporteurs).
+  const scopeModel: DBModel = useMemo(() => {
+    if (exportScope.kind === "slot") return subModelForSlot(model, exportScope.slotId);
+    if (exportScope.kind === "instance") return subModelForInstance(model, slots, exportScope.instanceId);
+    return { tables: visibleTables, relations: visibleRelations };
+  }, [exportScope, model, slots, visibleTables, visibleRelations]);
+
+  const exporter = getExporter(exportFormat) ?? getExporter("sql")!;
   const exportText = useMemo(() => {
-    if (exportView === "sql") return toSQL(exportVisible);
-    if (exportView === "prisma") return toPrisma(exportVisible);
-    if (exportView === "drizzle") return toDrizzle(exportVisible);
-    if (exportView === "json") return JSON.stringify(model, null, 2);
-    return "";
-  }, [exportView, model, exportVisible]);
-  const exportFileName = useMemo(() => {
-    if (exportView === "json") return "mcd.json";
-    if (exportView === "drizzle") return "schema.ts";
-    if (exportView === "prisma") return "schema.prisma";
-    return "mcd.sql";
-  }, [exportView]);
+    try {
+      return exporter.generate(scopeModel);
+    } catch {
+      return "";
+    }
+  }, [exporter, scopeModel]);
+
+  const scopeName = useMemo(() => {
+    if (exportScope.kind === "slot") return slots.find((s) => s.id === exportScope.slotId)?.name ?? "modèle";
+    if (exportScope.kind === "instance") return instances.find((i) => i.id === exportScope.instanceId)?.name ?? "instance";
+    return "canvas";
+  }, [exportScope, slots, instances]);
+
+  const exportFileName = useMemo(
+    () => safeFileName(scopeName, exporter.extension),
+    [scopeName, exporter]
+  );
+
+  /** Fichiers du ZIP d'instance : un fichier par modèle, même format. */
+  const instanceZipEntries = useMemo(() => {
+    if (exportScope.kind !== "instance") return [];
+    if (exporter.kind !== "code" && exporter.kind !== "data") return [];
+    const members = slotsOfInstance(slots, exportScope.instanceId);
+    return members
+      .map((s) => {
+        const sub = subModelForSlot(model, s.id);
+        if (!sub.tables.length) return null;
+        return { name: safeFileName(s.name, exporter.extension), content: exporter.generate(sub) };
+      })
+      .filter((e): e is { name: string; content: string } => !!e);
+  }, [exportScope, exporter, slots, model]);
+
+  const scopeLabel = useMemo(() => {
+    if (exportScope.kind === "slot") {
+      const sub = scopeModel;
+      return `Modèle « ${scopeName} » · ${sub.tables.length} table(s) · format ${exporter.label}`;
+    }
+    if (exportScope.kind === "instance") {
+      const members = slotsOfInstance(slots, exportScope.instanceId).length;
+      return `Instance « ${scopeName} » · ${members} modèle(s) · ${scopeModel.tables.length} table(s) · ${exporter.label}${instanceZipEntries.length > 1 ? " · ZIP (1 fichier par modèle)" : ""}`;
+    }
+    if (exportFormat === "json") return `Canvas · sauvegarde complète · ${model.tables.length} tables (masqués inclus)`;
+    return `Canvas · ${visibleTables.length} table(s) visible(s) · ${visibleRelations.length} lien(s) — masque une instance pour l'exclure`;
+  }, [exportScope, scopeModel, scopeName, exporter, slots, instanceZipEntries, exportFormat, model, visibleTables, visibleRelations]);
 
   const download = (filename: string, content: string, mime = "text/plain") => {
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(new Blob([content], { type: mime }));
-    a.download = filename;
-    a.click();
-    URL.revokeObjectURL(a.href);
+    downloadBlob(new Blob([content], { type: mime }), filename);
   };
 
   const exportSVGString = useCallback(
-    () => buildExportSVG(visibleTables, visibleRelations),
-    [visibleTables, visibleRelations]
+    () => buildExportSVG(scopeModel.tables, scopeModel.relations, { title: `MCD — ${scopeName}` }),
+    [scopeModel, scopeName]
   );
 
   const exportPNG = useCallback(() => {
@@ -585,24 +744,95 @@ export default function App() {
     const blob = new Blob([svg], { type: "image/svg+xml;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     img.onload = () => {
+      // Rendu net 2x : dimensions doublées, fond papier.
+      const w = (img.width || 1600) * 2;
+      const h = (img.height || 1000) * 2;
       const canvas = document.createElement("canvas");
-      canvas.width = img.width || 1600;
-      canvas.height = img.height || 1000;
+      canvas.width = w;
+      canvas.height = h;
       const ctx = canvas.getContext("2d")!;
       ctx.fillStyle = "#E9E7E1";
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.fillRect(0, 0, w, h);
+      ctx.scale(2, 2);
       ctx.drawImage(img, 0, 0);
       URL.revokeObjectURL(url);
       canvas.toBlob((b) => {
         if (!b) return;
-        const a = document.createElement("a");
-        a.href = URL.createObjectURL(b);
-        a.download = exportFileName.replace(/\.[^.]+$/, "") + ".png";
-        a.click();
+        downloadBlob(b, safeFileName(scopeName, "png"));
       }, "image/png");
     };
     img.src = url;
-  }, [exportSVGString, exportFileName]);
+  }, [exportSVGString, scopeName]);
+
+  const downloadZip = useCallback(() => {
+    if (!instanceZipEntries.length) return;
+    const blob = makeZipBlob(instanceZipEntries);
+    downloadBlob(blob, safeFileName(`${scopeName}-${exportFormat}`, "zip"));
+    setParseMsg(`Instance « ${scopeName} » exportée en ZIP : ${instanceZipEntries.length} fichier(s) ${exporter.label}.`);
+  }, [instanceZipEntries, scopeName, exportFormat, exporter]);
+
+  // ---------- partage par lien (snapshot figé) ----------
+  const openShare = useCallback((kind: ShareKind, id?: string) => {
+    const name =
+      kind === "slot"
+        ? (slots.find((s) => s.id === id)?.name ?? "modèle")
+        : kind === "instance"
+          ? (instances.find((i) => i.id === id)?.name ?? "instance")
+          : "canvas";
+    setShareUrl("");
+    setShareTarget({ kind, id, name });
+  }, [slots, instances]);
+
+  const createShare = useCallback(() => {
+    if (!shareTarget) return;
+    let snapModel: DBModel = { tables: visibleTables, relations: visibleRelations };
+    if (shareTarget.kind === "slot" && shareTarget.id) snapModel = subModelForSlot(model, shareTarget.id);
+    else if (shareTarget.kind === "instance" && shareTarget.id) snapModel = subModelForInstance(model, slots, shareTarget.id);
+    else if (shareTarget.kind === "canvas" && exportFormat === "json") snapModel = model;
+    const snap: ShareSnapshot = {
+      v: 1,
+      kind: shareTarget.kind,
+      name: shareTarget.name,
+      slotId: shareTarget.kind === "slot" ? shareTarget.id : undefined,
+      instanceId: shareTarget.kind === "instance" ? shareTarget.id : undefined,
+      model: snapModel,
+      slots,
+      instances,
+      createdAt: new Date().toISOString(),
+    };
+    setShareUrl(buildShareUrl(snap));
+  }, [shareTarget, model, slots, instances, visibleTables, visibleRelations, exportFormat]);
+
+  const quitSharedView = useCallback(() => {
+    location.hash = "";
+    location.reload();
+  }, []);
+
+  /** Envoie le schéma partagé (image SVG) sur un hébergeur public → URL mondiale. */
+  const publishShareTarget = useCallback(async (): Promise<PublishResult> => {
+    if (!shareTarget) throw new Error("Choisis d'abord quoi partager.");
+    let snapModel: DBModel = { tables: visibleTables, relations: visibleRelations };
+    if (shareTarget.kind === "slot" && shareTarget.id) snapModel = subModelForSlot(model, shareTarget.id);
+    else if (shareTarget.kind === "instance" && shareTarget.id) snapModel = subModelForInstance(model, slots, shareTarget.id);
+    if (!snapModel.tables.length) throw new Error("Rien à publier : ce périmètre est vide ou masqué.");
+    const svg = buildExportSVG(snapModel.tables, snapModel.relations, { title: `MCD — ${shareTarget.name}` });
+    const res = await publishWorldwide(safeFileName(shareTarget.name, "svg"), svg, "image/svg+xml");
+    setParseMsg(`« ${shareTarget.name} » publié en ligne : ${res.url} (${res.retention}).`);
+    return res;
+  }, [shareTarget, model, slots, visibleTables, visibleRelations]);
+
+  const adoptSharedView = useCallback(() => {
+    // La copie partagée devient MON studio : on la persiste puis on recharge
+    // sans hash (sauvegarde auto réactivée). L'original de l'expéditeur n'est
+    // jamais touché : tout est local à ce navigateur.
+    try {
+      localStorage.setItem(STORE_KEY, JSON.stringify(model));
+      localStorage.setItem(SLOTS_KEY, JSON.stringify(slots));
+      localStorage.setItem(INSTANCES_KEY, JSON.stringify(instances));
+    } catch { /* ignore */ }
+    location.hash = "";
+    location.reload();
+  }, [model, slots, instances]);
 
   const newDiagram = () => {
     if (!confirm("Tout effacer et repartir de zéro ?")) return;
@@ -655,8 +885,29 @@ export default function App() {
 
   const totalFields = model.tables.reduce((a, t) => a + t.fields.length, 0);
 
+  /** Pastille instance affichée sur chaque carte du canvas. */
+  const slotMeta = useMemo(() => {
+    const m = new Map<string, { name: string; color?: string }>();
+    const instById = new Map(instances.map((i) => [i.id, i]));
+    for (const s of slots) {
+      if (!s.instanceId) continue;
+      const inst = instById.get(s.instanceId);
+      if (inst) m.set(s.id, { name: inst.name, color: inst.color });
+    }
+    return m;
+  }, [slots, instances]);
+
   return (
     <div className={`app ${focusMode ? "focus" : ""}`}>
+      {isSharedView && sharedSnap && (
+        <div className="share-banner">
+          <span>🔗 Aperçu partagé — <b>{sharedSnap.name}</b> ({sharedSnap.model.tables.length} tables, figé le {sharedSnap.createdAt.slice(0, 10)}) · l'original est intouchable</span>
+          <span style={{ flex: 1 }} />
+          <button className="btn small" onClick={adoptSharedView} title="Adopter cette copie et travailler dessus">Adopter ma copie</button>
+          <button className="btn small" onClick={() => download("partage.json", JSON.stringify(sharedSnap.model, null, 2), "application/json")} title="Exporter le snapshot">⤓ JSON</button>
+          <button className="btn small danger" onClick={quitSharedView}>Quitter ✕</button>
+        </div>
+      )}
       {!focusMode && (
         <CommandBar
           tables={model.tables.length}
@@ -666,6 +917,7 @@ export default function App() {
           query={query}
           onQuery={setQuery}
           onExport={openExport}
+          onShare={() => openShare("canvas")}
           onUndo={undo}
           onRedo={redo}
           canUndo={canUndo}
@@ -684,6 +936,8 @@ export default function App() {
         {showLeft && !focusMode && (
           <LeftPanel
             slots={slots}
+            instances={instances}
+            model={model}
             slotTableCount={slotTableCount}
             issues={issues}
             parseMsg={parseMsg}
@@ -691,6 +945,19 @@ export default function App() {
             onAddSlot={() => addSlot()}
             onDeleteSlot={deleteSlot}
             onMergeSlot={mergeImportSlot}
+            onAddInstance={addInstance}
+            onRenameInstance={renameInstanceCb}
+            onToggleInstanceHidden={toggleInstanceHiddenCb}
+            onToggleInstanceCollapsed={toggleInstanceCollapsedCb}
+            onDeleteInstance={deleteInstance}
+            onAssignSlot={assignSlot}
+            onSmartLayout={smartLayout}
+            onShowAll={showAll}
+            onLayoutInstance={layoutInstance}
+            onIsolateInstance={isolateInstance}
+            onExportInstance={(id) => { setExportScope({ kind: "instance", instanceId: id }); setExportOpen(true); }}
+            onShareSlot={(id) => openShare("slot", id)}
+            onShareInstance={(id) => openShare("instance", id)}
             onHide={() => setShowLeft(false)}
             onGallery={() => setShowGallery(true)}
             onTour={openTour}
@@ -740,10 +1007,10 @@ export default function App() {
           onToggleLinkMode={() => { setLinkMode((v) => !v); setLinkFromId(null); }}
           onQuitLinkMode={() => { setLinkMode(false); setLinkFromId(null); }}
           onToggleFocus={() => setFocusMode((v) => !v)}
-          onAutoLayout={autoLayout}
+          onAutoLayout={smartLayout}
           onNewDiagram={newDiagram}
           onGallery={() => setShowGallery(true)}
-          onExportSQL={() => openExport("sql")}
+          onExportSQL={() => openExport()}
           onShowPanels={() => { setFocusMode(false); setShowLeft(true); setShowRight(true); }}
           onCanvasMouseDown={camera.onCanvasMouseDown}
           onCanvasClick={() => { if (linkMode) setLinkFromId(null); else setSelectedId(null); }}
@@ -755,6 +1022,7 @@ export default function App() {
           onCenterOn={centerOn}
           onClearQuery={() => setQuery("")}
           onAddTable={addTable}
+          slotMeta={slotMeta}
         />
 
         {showRight && !focusMode && (
@@ -807,19 +1075,35 @@ export default function App() {
         />
       )}
 
-      {exportView && (
+      {exportOpen && (
         <ExportModal
-          view={exportView}
-          text={exportText}
-          fileName={exportFileName}
-          visibleTables={visibleTables.length}
-          visibleRelations={visibleRelations.length}
-          totalTables={model.tables.length}
-          onView={setExportView}
-          onClose={() => setExportView(null)}
-          onDownload={() => download(exportFileName, exportText)}
+          formatId={exportFormat}
+          onFormat={setExportFormat}
+          scope={exportScope}
+          onScope={setExportScope}
+          instances={instances}
+          slots={slots}
+          previewText={exportText}
+          previewFileName={exportFileName}
+          zipFiles={instanceZipEntries.length}
+          scopeLabel={scopeLabel}
+          onClose={() => setExportOpen(false)}
+          onCopy={() => { void navigator.clipboard.writeText(exportText); }}
+          onDownload={() => download(exportFileName, exportText, exporter.mime)}
+          onDownloadZip={downloadZip}
           onExportPNG={exportPNG}
-          onExportSVG={() => download(exportFileName.replace(/\.[^.]+$/, "") + ".svg", exportSVGString(), "image/svg+xml")}
+          onExportSVG={() => download(safeFileName(scopeName, "svg"), exportSVGString(), "image/svg+xml")}
+        />
+      )}
+
+      {shareTarget && (
+        <ShareModal
+          kind={shareTarget.kind}
+          targetName={shareTarget.name}
+          url={shareUrl}
+          onCreate={createShare}
+          onPublishWorldwide={publishShareTarget}
+          onClose={() => { setShareTarget(null); setShareUrl(""); }}
         />
       )}
 
