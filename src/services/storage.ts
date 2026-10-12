@@ -1,10 +1,11 @@
-import type { DBModel, ImportSlot } from "../types";
+import type { DBModel, ImportSlot, Instance } from "../types";
 import { parseAuto } from "../parsers";
 import { EXAMPLE_SQL } from "../examples";
 
 export const STORE_KEY = "mcd-studio-v2";
 export const LEGACY_STORE_KEY = "mcd-studio-v1";
 export const SLOTS_KEY = "mcd-studio-slots-v1";
+export const INSTANCES_KEY = "mcd-studio-instances-v1";
 export const TOUR_KEY = "mcd-studio-tour-v1";
 
 // Slot stable du modèle de base : le même id sert au slot ET au tag des tables.
@@ -57,6 +58,22 @@ export function saveModel(model: DBModel): string {
 export function saveSlots(slots: ImportSlot[]): void {
   try {
     localStorage.setItem(SLOTS_KEY, JSON.stringify(slots));
+  } catch { /* ignore */ }
+}
+
+export function loadInstances(): Instance[] {
+  try {
+    const raw = localStorage.getItem(INSTANCES_KEY);
+    if (raw == null) return [];
+    const arr = JSON.parse(raw) as Instance[];
+    if (Array.isArray(arr)) return arr.filter((i) => i && typeof i.id === "string");
+  } catch { /* ignore */ }
+  return [];
+}
+
+export function saveInstances(instances: Instance[]): void {
+  try {
+    localStorage.setItem(INSTANCES_KEY, JSON.stringify(instances));
   } catch { /* ignore */ }
 }
 

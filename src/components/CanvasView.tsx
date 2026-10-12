@@ -42,6 +42,8 @@ interface CanvasViewProps {
   onCenterOn: (t: DBTable) => void;
   onClearQuery: () => void;
   onAddTable: () => void;
+  /** Pastille instance par slotId (projet) : affichée sur chaque carte. */
+  slotMeta?: Map<string, { name: string; color?: string }>;
 }
 
 export function CanvasView(p: CanvasViewProps) {
@@ -145,6 +147,7 @@ export function CanvasView(p: CanvasViewProps) {
           {p.visibleTables.map((t) => {
             const dim = p.hasQuery && !p.matchTable(t);
             const hit = p.hasQuery && p.matchTable(t);
+            const meta = t.slotId ? p.slotMeta?.get(t.slotId) : undefined;
             return (
               <div key={t.id}
                 className={`table-card ${p.selectedId === t.id ? "selected" : ""} ${dim ? "dim" : ""} ${hit && p.hasQuery ? "hit" : ""} ${p.linkMode ? "linkable" : ""} ${p.linkFromId === t.id ? "link-from" : ""} ${p.linkMode && p.linkHoverId === t.id && p.linkFromId !== t.id ? "link-hover" : ""}`}
@@ -162,6 +165,12 @@ export function CanvasView(p: CanvasViewProps) {
                   <span className="card-title">{t.name}</span>
                   <span className="card-count">{t.fields.length}</span>
                 </div>
+                {meta && (
+                  <div className="card-inst" title={`Instance : ${meta.name}`}>
+                    <span className="instance-dot" style={{ background: meta.color ?? "#FF2B1D" }} />
+                    {meta.name}
+                  </div>
+                )}
                 <div className="card-body">
                   {t.fields.map((f) => (
                     <div key={f.id} className="frow">

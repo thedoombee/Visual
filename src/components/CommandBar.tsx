@@ -1,7 +1,5 @@
 import type { ModelIssue } from "../domain/model";
 
-export type ExportView = "sql" | "prisma" | "drizzle" | "json";
-
 interface CommandBarProps {
   tables: number;
   relations: number;
@@ -9,7 +7,10 @@ interface CommandBarProps {
   issues: ModelIssue[];
   query: string;
   onQuery: (q: string) => void;
-  onExport: (v: ExportView) => void;
+  /** Ouvre le menu d'export unique (choix du format dans le modal). */
+  onExport: () => void;
+  /** Ouvre le partage du canvas (lien figé). */
+  onShare: () => void;
   onUndo: () => void;
   onRedo: () => void;
   canUndo: boolean;
@@ -44,11 +45,9 @@ export function CommandBar(p: CommandBarProps) {
         className="cmd-search" placeholder="Rechercher table / champ…"
         value={p.query} onChange={(e) => p.onQuery(e.target.value)}
       />
-      <div className="cmd-group" id="tour-export" title="Exporter le canvas">
-        <button className="exp-btn" onClick={() => p.onExport("sql")}>SQL</button>
-        <button className="exp-btn" onClick={() => p.onExport("prisma")}>PRISMA</button>
-        <button className="exp-btn" onClick={() => p.onExport("drizzle")}>DRIZZLE</button>
-        <button className="exp-btn" onClick={() => p.onExport("json")}>JSON</button>
+      <div className="cmd-group" id="tour-export" title="Exporter : choisis le format dans le menu">
+        <button className="btn small primary" onClick={p.onExport}>⤓ Exporter</button>
+        <button className="btn small" onClick={p.onShare} title="Créer un lien figé du canvas visible (partage lecture seule)">🔗 Partager</button>
       </div>
       <div className="cmd-group">
         <button className="btn small" onClick={p.onUndo} disabled={!p.canUndo} title="Annuler (Ctrl+Z)">↩</button>

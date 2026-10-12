@@ -2,38 +2,91 @@ import type { DBRelation, DBTable } from "../types";
 import { mcdCards } from "../types";
 import { CARD_W, HEADER_H, ROW_H, cardH, edgePath, fieldY } from "./geometry";
 
-/** Rendu SVG statique du canvas (bouton SVG / base du PNG). Pur et testable. */
-export function exportSVGString(tables: DBTable[], relations: DBRelation[]): string {
-  const pad = 60;
-  const maxX = (tables.length ? Math.max(...tables.map((t) => t.x + CARD_W), 800) : 800) + pad;
-  const maxY = (tables.length ? Math.max(...tables.map((t) => t.y + cardH(t)), 600) : 600) + pad;
-  const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-  let s = `<svg xmlns="http://www.w3.org/2000/svg" width="${maxX}" height="${maxY}" font-family="Space Mono,monospace">`;
+/**
+ * Rendu SVG statique haute lisibilité (bouton SVG / base du PNG).
+ * - Lignes de séparation entre chaque champ + zébrage léger.
+ * - Pastilles PK (noir) / FK (rouge) + type mono bien contrasté.
+ * - Liens épais avec halo blanc, pastilles larges, cardinalités sur fond.
+ * - Titre + date + légende intégrés (présentable tel quel).
+ * Pur et testable.
+ */
+export function exportSVGString(
+  tables: DBTable[],
+  relations: DBRelation[],
+  opts?: { title?: string }
+): string {
+  const pad = 80;
+  const titleH = 84;
+  const legendH = 44;
+  const maxX = (tables.length ? Math.max(...tables.map((t) => t.x + CARD_W), 900) : 900) + pad;
+  const maxY =
+    (tables.length ? Math.max(...tables.map((t) => t.y + cardH(t)), 600) : 600) + pad + titleH + legendH;
+  const esc = (s: string) =>
+    s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  const title = opts?.title ?? "MCD — Schéma de base de données";
+  const date = new Date().toLocaleDateString("fr-FR", { day: "2-digit", month: "short", year: "numeric" });
+
+  let s = `<svg xmlns="http://www.w3.org/2000/svg" width="${maxX}" height="${maxY}" font-family="'Space Mono',ui-monospace,monospace">`;
   s += `<rect width="100%" height="100%" fill="#E9E7E1"/>`;
+  // Grille de fond discrète.
+  s += `<defs><pattern id="dots" width="22" height="22" patternUnits="userSpaceOnUse"><circle cx="1.5" cy="1.5" r="1.2" fill="#C9C5BB"/></pattern></defs>`;
+  s += `<rect width="100%" height="100%" fill="url(#dots)" opacity="0.55"/>`;
+  // Bandeau titre.
+  s += `<g><rect x="0" y="0" width="${maxX}" height="${titleH}" fill="#111111"/>`;
+  s += `<text x="40" y="38" fill="#FFFFFF" font-size="22" font-weight="700" letter-spacing="1">${esc(title.toUpperCase())}</text>`;
+  s += `<text x="40" y="62" fill="#CFcabD" font-size="12">${tables.length} table(s) · ${relations.length} lien(s) · ${esc(date)} · MCD+STUDIO</text>`;
+  s += `<rect x="${maxX - 120}" y="22" width="80" height="40" fill="#FF2B1D"/><text x="${maxX - 80}" y="48" fill="#fff" font-size="20" font-weight="700" text-anchor="middle">+</text></g>`;
+
+  const oy = titleH;
   const vByName = new Map(tables.map((t) => [t.name, t]));
+  // Liens : halo blanc + trait épais + pastilles bien visibles.
   for (const r of relations) {
     const a = vByName.get(r.fromTable);
     const b = vByName.get(r.toTable);
     if (!a || !b) continue;
-    const x1 = a.x + CARD_W, y1 = fieldY(a, r.fromField);
-    const x2 = b.x, y2 = fieldY(b, r.toField);
+    const x1 = a.x + CARD_W;
+    const y1 = oy + fieldY(a, r.fromField);
+    const y2 = oy + fieldY(b, r.toField);
+    const x2 = b.x;
+    const d = edgePath(x1, y1, x2, y2);
     const { a: cA, b: cB } = mcdCards(r);
-    s += `<path d="${edgePath(x1, y1, x2, y2)}" fill="none" stroke="#111111" stroke-width="2"/>`;
-    s += `<circle cx="${x1}" cy="${y1}" r="4" fill="#111111"/><circle cx="${x2}" cy="${y2}" r="4" fill="#FF2B1D"/>`;
-    s += `<text x="${x1 + 9}" y="${y1 - 8}" font-size="10" font-weight="700" fill="#111111">${cA}</text>`;
-    s += `<text x="${x2 - 9}" y="${y2 - 8}" font-size="10" font-weight="700" fill="#111111" text-anchor="end">${cB}</text>`;
+    s += `<path d="${d}" fill="none" stroke="#FFFFFF" stroke-width="7" stroke-linecap="round" opacity="0.9"/>`;
+    s += `<path d="${d}" fill="none" stroke="#111111" stroke-width="3"/>`;
+    s += `<circle cx="${x1}" cy="${y1}" r="7" fill="#111111" stroke="#FFFFFF" stroke-width="2.5"/><circle cx="${x1}" cy="${y1}" r="2.4" fill="#FFFFFF"/>`;
+    s += `<circle cx="${x2}" cy="${y2}" r="7" fill="#FF2B1D" stroke="#FFFFFF" stroke-width="2.5"/><circle cx="${x2}" cy="${y2}" r="2.4" fill="#FFFFFF"/>`;
+    // Cardinalités sur pastille fond encre pour rester lisibles.
+    const wA = 8 + cA.length * 7;
+    const wB = 8 + cB.length * 7;
+    s += `<rect x="${x1 + 12}" y="${y1 - 26}" width="${wA}" height="18" fill="#111111"/><text x="${x1 + 12 + wA / 2}" y="${y1 - 12.5}" font-size="11" font-weight="700" fill="#FFFFFF" text-anchor="middle">${esc(cA)}</text>`;
+    s += `<rect x="${x2 - 12 - wB}" y="${y2 - 26}" width="${wB}" height="18" fill="#111111"/><text x="${x2 - 12 - wB / 2}" y="${y2 - 12.5}" font-size="11" font-weight="700" fill="#FFFFFF" text-anchor="middle">${esc(cB)}</text>`;
   }
+  // Tables : en-tête + lignes séparées + zébrage + badges PK/FK.
   for (const t of tables) {
     const h = cardH(t);
-    s += `<g><rect x="${t.x}" y="${t.y}" width="${CARD_W}" height="${h}" fill="#FBFAF7" stroke="#111111" stroke-width="1.5"/>`;
-    s += `<rect x="${t.x}" y="${t.y}" width="${CARD_W}" height="${HEADER_H}" fill="#111111"/>`;
-    s += `<text x="${t.x + 12}" y="${t.y + 24}" fill="white" font-size="12" font-weight="700">${esc(t.name.toUpperCase())}</text>`;
+    const ty = oy + t.y;
+    s += `<g>`;
+    s += `<rect x="${t.x + 4}" y="${ty + 5}" width="${CARD_W}" height="${h}" fill="#111111" opacity="0.16"/>`;
+    s += `<rect x="${t.x}" y="${ty}" width="${CARD_W}" height="${h}" fill="#FBFAF7" stroke="#111111" stroke-width="2"/>`;
+    s += `<rect x="${t.x}" y="${ty}" width="${CARD_W}" height="${HEADER_H}" fill="#111111"/>`;
+    s += `<text x="${t.x + 12}" y="${ty + 23}" fill="#FFFFFF" font-size="12.5" font-weight="700">${esc(t.name.toUpperCase())}</text>`;
+    s += `<rect x="${t.x + CARD_W - 34}" y="${ty + 9}" width="24" height="18" fill="none" stroke="#FFFFFF" stroke-width="1.2"/><text x="${t.x + CARD_W - 22}" y="${ty + 22.5}" fill="#FFFFFF" font-size="10" font-weight="700" text-anchor="middle">${t.fields.length}</text>`;
     t.fields.forEach((f, i) => {
-      const y = t.y + HEADER_H + i * ROW_H;
-      s += `<text x="${t.x + 12}" y="${y + 19}" font-size="11" fill="#111111">${esc(f.name)}${f.pk ? " *" : ""}${f.fk ? " >" : ""}</text>`;
-      s += `<text x="${t.x + CARD_W - 10}" y="${y + 19}" font-size="9" fill="#8A8781" text-anchor="end">${esc(f.type)}</text>`;
+      const y = ty + HEADER_H + i * ROW_H;
+      if (i % 2 === 1) s += `<rect x="${t.x + 1.5}" y="${y}" width="${CARD_W - 3}" height="${ROW_H}" fill="#111111" opacity="0.055"/>`;
+      // Ligne de séparation bien visible entre les champs.
+      s += `<line x1="${t.x}" y1="${y + ROW_H}" x2="${t.x + CARD_W}" y2="${y + ROW_H}" stroke="#111111" stroke-width="${i === t.fields.length - 1 ? 0 : 0.8}" opacity="0.35"/>`;
+      const marker = f.pk ? "● " : f.fk ? "→ " : "";
+      const color = f.pk ? "#FF2B1D" : "#111111";
+      s += `<text x="${t.x + 12}" y="${y + 18}" font-size="11.5" font-weight="${f.pk || f.fk ? 700 : 400}" fill="${color}">${esc(marker)}${esc(f.name)}</text>`;
+      s += `<text x="${t.x + CARD_W - 44}" y="${y + 18}" font-size="9" fill="#4A4A45" text-anchor="end">${esc(f.type)}</text>`;
+      if (f.pk) s += `<rect x="${t.x + CARD_W - 38}" y="${y + 5}" width="28" height="16" fill="#111111"/><text x="${t.x + CARD_W - 24}" y="${y + 17}" font-size="8.5" font-weight="700" fill="#fff" text-anchor="middle">PK</text>`;
+      else if (f.fk) s += `<rect x="${t.x + CARD_W - 38}" y="${y + 5}" width="28" height="16" fill="#FF2B1D"/><text x="${t.x + CARD_W - 24}" y="${y + 17}" font-size="8.5" font-weight="700" fill="#fff" text-anchor="middle">FK</text>`;
+      else if (f.unique) s += `<rect x="${t.x + CARD_W - 38}" y="${y + 5}" width="28" height="16" fill="none" stroke="#111111" stroke-width="1" stroke-dasharray="2 2"/><text x="${t.x + CARD_W - 24}" y="${y + 17}" font-size="8.5" font-weight="700" fill="#111111" text-anchor="middle">UQ</text>`;
     });
     s += `</g>`;
   }
+  // Légende bas de page.
+  const ly = maxY - legendH + 14;
+  s += `<g font-size="11" fill="#111111"><circle cx="40" cy="${ly}" r="6" fill="#111111" stroke="#fff" stroke-width="2"/><text x="54" y="${ly + 4}">source (FK)</text><circle cx="190" cy="${ly}" r="6" fill="#FF2B1D" stroke="#fff" stroke-width="2"/><text x="204" y="${ly + 4}">cible (PK)</text><text x="330" y="${ly + 4}" font-weight="700">● PK</text><text x="390" y="${ly + 4}" font-weight="700" fill="#FF2B1D">→ FK</text><text x="${maxX - 40}" y="${ly + 4}" text-anchor="end" fill="#4A4A45">MCD+STUDIO · lisible, imprimable</text></g>`;
   return s + `</svg>`;
 }
