@@ -52,7 +52,6 @@ import {
   type ShareKind,
   type ShareSnapshot,
 } from "./services/share";
-import { publishWorldwide, type PublishResult } from "./services/publish";
 import {
   initialModel,
   INSTANCES_KEY,
@@ -808,19 +807,6 @@ export default function App() {
     location.reload();
   }, []);
 
-  /** Envoie le schéma partagé (image SVG) sur un hébergeur public → URL mondiale. */
-  const publishShareTarget = useCallback(async (): Promise<PublishResult> => {
-    if (!shareTarget) throw new Error("Choisis d'abord quoi partager.");
-    let snapModel: DBModel = { tables: visibleTables, relations: visibleRelations };
-    if (shareTarget.kind === "slot" && shareTarget.id) snapModel = subModelForSlot(model, shareTarget.id);
-    else if (shareTarget.kind === "instance" && shareTarget.id) snapModel = subModelForInstance(model, slots, shareTarget.id);
-    if (!snapModel.tables.length) throw new Error("Rien à publier : ce périmètre est vide ou masqué.");
-    const svg = buildExportSVG(snapModel.tables, snapModel.relations, { title: `MCD — ${shareTarget.name}` });
-    const res = await publishWorldwide(safeFileName(shareTarget.name, "svg"), svg, "image/svg+xml");
-    setParseMsg(`« ${shareTarget.name} » publié en ligne : ${res.url} (${res.retention}).`);
-    return res;
-  }, [shareTarget, model, slots, visibleTables, visibleRelations]);
-
   const adoptSharedView = useCallback(() => {
     // La copie partagée devient MON studio : on la persiste puis on recharge
     // sans hash (sauvegarde auto réactivée). L'original de l'expéditeur n'est
@@ -1102,7 +1088,6 @@ export default function App() {
           targetName={shareTarget.name}
           url={shareUrl}
           onCreate={createShare}
-          onPublishWorldwide={publishShareTarget}
           onClose={() => { setShareTarget(null); setShareUrl(""); }}
         />
       )}

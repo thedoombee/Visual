@@ -494,8 +494,3 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
   width: 100%; border: 1.5px solid var(--ink); padding: 8px 10px;
   font-family: var(--mono); font-size: 11px; background: var(--card); color: var(--ink);
 }
-.publish-box {
-  border: 2px dashed var(--ink); padding: 12px; display: flex;
-  flex-direction: column; gap: 10px; background: var(--card);
-}
-.publish-box .muted { margin: 0; }
