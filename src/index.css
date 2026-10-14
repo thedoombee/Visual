@@ -155,7 +155,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
   flex: 1; overflow: hidden; cursor: grab; position: relative;
   background-color: var(--paper);
   background-image: radial-gradient(#a9a49a 1px, transparent 1.2px);
-  background-size: 22px 22px;
+  background-size: 26px 26px;
 }
 .canvas:active { cursor: grabbing; }
 .canvas-bgword {
@@ -165,7 +165,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 }
 .canvas-bgword span { -webkit-text-stroke: 0; color: var(--red); opacity: .9; }
 .world { position: absolute; left: 0; top: 0; transform-origin: 0 0; width: 10px; height: 10px; will-change: transform; }
-.edges { position: absolute; left: 0; top: 0; width: 6000px; height: 6000px; pointer-events: none; }
+.edges { position: absolute; left: 0; top: 0; width: 10000px; height: 10000px; pointer-events: none; }
 .edge-line { fill: none; stroke: var(--ink); stroke-width: 1.8; pointer-events: stroke; }
 .edge:hover .edge-line { stroke: var(--red); stroke-width: 2.6; }
 .dot.from { fill: var(--ink); stroke: #fff; stroke-width: 1.5; }
@@ -494,3 +494,69 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
   width: 100%; border: 1.5px solid var(--ink); padding: 8px 10px;
   font-family: var(--mono); font-size: 11px; background: var(--card); color: var(--ink);
 }
+
+/* ============ MASQUAGE VIA INSTANCE (reflet, sans écraser le réglage perso) ============ */
+.slot.via-instance { border-style: dashed; }
+.slot.via-instance .slot-head { background: var(--ink-soft); }
+.via-badge {
+  font-family: var(--mono); font-size: 9px; font-weight: 700; letter-spacing: .04em;
+  border: 1px solid #fff; color: #fff; padding: 1px 7px; border-radius: 999px;
+  white-space: nowrap; max-width: 130px; overflow: hidden; text-overflow: ellipsis;
+}
+.slot.folded .via-badge { border-color: var(--ink); color: var(--ink); }
+.instance-member.is-hidden { opacity: .6; }
+.instance-member.is-hidden .member-name { text-decoration: line-through; text-decoration-color: var(--red); }
+.member-state {
+  font-family: var(--mono); font-size: 9px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: .06em; color: var(--muted); border: 1px dotted var(--muted);
+  padding: 0 6px; white-space: nowrap;
+}
+.instance-member.is-hidden .member-state { color: var(--red); border-color: var(--red); border-style: solid; }
+
+/* ============ STYLE DES LIENS (sélecteur toolbar) ============ */
+.edge-style {
+  font-family: var(--mono); font-size: 10px; font-weight: 700;
+  border: 1.5px solid var(--ink); background: var(--card); color: var(--ink);
+  padding: 4px 6px; cursor: pointer; border-radius: 0;
+}
+.edge-style:hover { background: var(--ink); color: #fff; }
+
+/* ============ DROPDOWN COMPACT : instance masquée (allège le panneau) ============ */
+.masked-drop {
+  border: 1.5px dashed var(--muted); background: var(--paper);
+  display: flex; flex-direction: column; gap: 6px; padding: 6px;
+}
+.masked-drop-head {
+  display: flex; align-items: center; gap: 7px; width: 100%;
+  border: 1.5px solid var(--ink); background: var(--card); color: var(--ink);
+  font-family: var(--mono); font-size: 11px; font-weight: 700;
+  padding: 6px 8px; cursor: pointer; text-align: left;
+}
+.masked-drop-head:hover { background: var(--ink); color: #fff; }
+.masked-drop-head .masked-drop-title {
+  flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.masked-drop-head.icon-btn, button.masked-drop-head { font-family: var(--mono); }
+.instance-models.masked-drop { margin-bottom: 6px; }
+
+/* ============ CLUSTERS CANVAS : cadre projet (pointillé) + cadre modèle (plein) ============ */
+.cluster-bg {
+  position: absolute; border-radius: 2px;
+  pointer-events: none; z-index: 0;
+}
+.cluster-bg.inst { border: 1.5px dashed var(--muted); }
+.cluster-bg.model { border: 1px solid var(--muted); }
+.cluster-label {
+  position: absolute; top: -24px; left: -1px; z-index: 5;
+  font-family: var(--mono); font-size: 10px; font-weight: 700; letter-spacing: .06em;
+  text-transform: uppercase; color: #fff; padding: 5px 12px; white-space: nowrap;
+  max-width: max-content; overflow: hidden; text-overflow: ellipsis;
+  pointer-events: auto; cursor: grab; user-select: none;
+  border: 1.5px solid var(--ink);
+}
+.cluster-label:active { cursor: grabbing; }
+.cluster-label.model { font-size: 9.5px; top: -20px; padding: 4px 10px; }
+/* Cartes teintées aux couleurs de leur instance (ombre + pastille). */
+.table-card.has-inst { box-shadow: 4px 4px 0 var(--inst, var(--ink)); }
+.table-card.selected.has-inst { box-shadow: 4px 4px 0 var(--red); }
+.card-inst.manual { color: var(--muted); }

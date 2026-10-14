@@ -4,7 +4,9 @@ import type { DBModel, DBRelation, DBTable, ImportSlot, Instance } from "./types
 import { uid } from "./types";
 import { parseAuto } from "./parsers";
 import { type StarterPack } from "./templates";
-import { CARD_W, edgePath, fieldY } from "./domain/geometry";
+import { CARD_W, fieldY } from "./domain/geometry";
+import { edgePathFor, type EdgeStyle } from "./domain/edges";
+import { getImageTheme } from "./domain/exportTheme";
 import {
   addFieldTo,
   addRelationTo,
@@ -16,6 +18,7 @@ import {
   isDuplicateRelation,
   mergeModel,
   moveTableIn,
+  moveTablesBy,
   removeRelation,
   removeSlotTables,
   removeTable,
@@ -55,8 +58,12 @@ import {
 import {
   initialModel,
   INSTANCES_KEY,
+  loadEdgeStyle,
+  loadImageTheme,
   loadInstances,
   loadSlots,
+  saveEdgeStyle,
+  saveImageTheme,
   saveInstances,
   saveModel,
   saveSlots,
@@ -94,6 +101,12 @@ export default function App() {
   const [exportOpen, setExportOpen] = useState(false);
   const [exportFormat, setExportFormat] = useState("sql");
   const [exportScope, setExportScope] = useState<ExportScope>({ kind: "canvas" });
+  // Préférences d'affichage : style des liens (canvas + exports) et rendu
+  // des images. Persistées en local, hors historique (comme le zoom).
+  const [edgeStyle, setEdgeStyle] = useState<EdgeStyle>(() => loadEdgeStyle());
+  const [imageTheme, setImageTheme] = useState<string>(() => loadImageTheme());
+  const edgeStyleRef = useRef<EdgeStyle>(edgeStyle);
+  edgeStyleRef.current = edgeStyle;
   const [showGallery, setShowGallery] = useState(false);
   const [shareTarget, setShareTarget] = useState<null | { kind: ShareKind; id?: string; name: string }>(null);
   const [shareUrl, setShareUrl] = useState("");
@@ -225,6 +238,14 @@ export default function App() {
     if (isSharedView) return;
     saveInstances(instances);
   }, [instances, isSharedView]);
+
+  // Persistance des préférences d'affichage (locales, jamais partagées).
+  useEffect(() => {
+    saveEdgeStyle(edgeStyle);
+  }, [edgeStyle]);
+  useEffect(() => {
+    saveImageTheme(imageTheme);
+  }, [imageTheme]);
 
   // Visite guidée (état + positionnement + persistance "vue").
   const { tour, tourPos, openTour, closeTour, stepTour } = useTour();
@@ -630,12 +651,13 @@ export default function App() {
       }
     }
     const paintEdges = () => {
+      const style = edgeStyleRef.current;
       for (const le of liveEdges) {
         const nx1 = le.moveFrom ? le.x1 + tx : le.x1;
         const ny1 = le.moveFrom ? le.y1 + ty : le.y1;
         const nx2 = le.moveTo ? le.x2 + tx : le.x2;
         const ny2 = le.moveTo ? le.y2 + ty : le.y2;
-        le.path?.setAttribute("d", edgePath(nx1, ny1, nx2, ny2));
+        le.path?.setAttribute("d", edgePathFor(style, nx1, ny1, nx2, ny2));
         if (le.moveFrom) {
           le.fromDot?.setAttribute("cx", String(nx1));
           le.fromDot?.setAttribute("cy", String(ny1));
@@ -664,6 +686,117 @@ export default function App() {
       cardEl.style.transform = "";
       if (!moved) return;
       moveTable(t.id, Math.round(t.x + tx), Math.round(t.y + ty));
+      commitWorkspace(snapshot);
+    };
+    window.addEventListener("mousemove", move);
+    window.addEventListener("mouseup", up);
+  };
+
+  // Drag d'un cadre (étiquette ⤢) : déplace toutes ses tables d'un coup.
+  // Même contrat que le drag de carte : direct-DOM pendant le geste (zéro
+  // re-render, liens repeints en live), UN seul commit au relâcher.
+  const onClusterMouseDown = (e: React.MouseEvent, tableIds: string[]) => {
+    if ((e.target as HTMLElement).closest("button,input,select")) return;
+    if (linkMode) return;
+    if (!tableIds.length || !worldRef.current) return;
+    e.stopPropagation();
+    const z = camera.cam.z;
+    const sx0 = e.clientX, sy0 = e.clientY;
+    let tx = 0, ty = 0, moved = false;
+    const snapshot = workspace; // état avant déplacement, pour un seul pas d'historique
+    const movingIds = new Set(tableIds);
+    const movingNames = new Set(
+      model.tables.filter((t) => movingIds.has(t.id)).map((t) => t.name)
+    );
+    interface LiveEdge {
+      path: SVGPathElement | null;
+      fromDot: SVGCircleElement | null; fromLabel: SVGTextElement | null;
+      toDot: SVGCircleElement | null; toLabel: SVGTextElement | null;
+      x1: number; y1: number; x2: number; y2: number;
+      moveFrom: boolean; moveTo: boolean;
+    }
+    const liveEdges: LiveEdge[] = [];
+    const cardEls: HTMLElement[] = [];
+    const world = worldRef.current;
+    for (const id of movingIds) {
+      const el = world.querySelector(`[data-table="${id}"]`) as HTMLElement | null;
+      if (el) cardEls.push(el);
+    }
+    const clusterEl = (e.target as HTMLElement).closest("[data-cluster]") as HTMLElement | null;
+    // Cadres liés : quand on déplace un PROJET, ses cadres modèles suivent en
+    // direct. Quand on déplace un MODÈLE seul, le cadre projet parent ne suit
+    // PAS (il se recalcule au relâcher) — sinon c'est lui qu'on croit déplacer.
+    const extraEls: HTMLElement[] = [];
+    if (clusterEl) {
+      const key = clusterEl.dataset.cluster ?? "";
+      if (key.startsWith("inst:")) {
+        world.querySelectorAll(`[data-parent="${key}"]`).forEach((el) => {
+          if (el !== clusterEl) extraEls.push(el as HTMLElement);
+        });
+      }
+    }
+    for (const r of model.relations) {
+      const moveFrom = movingNames.has(r.fromTable);
+      const moveTo = movingNames.has(r.toTable);
+      if (!moveFrom && !moveTo) continue;
+      const a = byName.get(r.fromTable);
+      const b = byName.get(r.toTable);
+      if (!a || !b) continue;
+      const g = world.querySelector(`g.edge[data-rel="${r.id}"]`);
+      if (!g) continue;
+      const texts = g.querySelectorAll("text");
+      liveEdges.push({
+        path: g.querySelector("path.edge-line"),
+        fromDot: g.querySelector("circle.dot.from"),
+        fromLabel: (texts[0] as SVGTextElement | undefined) ?? null,
+        toDot: g.querySelector("circle.dot.to"),
+        toLabel: (texts[1] as SVGTextElement | undefined) ?? null,
+        x1: a.x + CARD_W, y1: fieldY(a, r.fromField),
+        x2: b.x, y2: fieldY(b, r.toField),
+        moveFrom, moveTo,
+      });
+    }
+    const paintEdges = () => {
+      const style = edgeStyleRef.current;
+      for (const le of liveEdges) {
+        const nx1 = le.moveFrom ? le.x1 + tx : le.x1;
+        const ny1 = le.moveFrom ? le.y1 + ty : le.y1;
+        const nx2 = le.moveTo ? le.x2 + tx : le.x2;
+        const ny2 = le.moveTo ? le.y2 + ty : le.y2;
+        le.path?.setAttribute("d", edgePathFor(style, nx1, ny1, nx2, ny2));
+        if (le.moveFrom) {
+          le.fromDot?.setAttribute("cx", String(nx1));
+          le.fromDot?.setAttribute("cy", String(ny1));
+          le.fromLabel?.setAttribute("x", String(nx1 + 9));
+          le.fromLabel?.setAttribute("y", String(ny1 - 8));
+        }
+        if (le.moveTo) {
+          le.toDot?.setAttribute("cx", String(nx2));
+          le.toDot?.setAttribute("cy", String(ny2));
+          le.toLabel?.setAttribute("x", String(nx2 - 9));
+          le.toLabel?.setAttribute("y", String(ny2 - 8));
+        }
+      }
+    };
+    const move = (ev: MouseEvent) => {
+      tx = (ev.clientX - sx0) / z;
+      ty = (ev.clientY - sy0) / z;
+      if (Math.abs(ev.clientX - sx0) + Math.abs(ev.clientY - sy0) > 3) moved = true;
+      // Les cartes du cadre + le cadre lui-même (+ parent/enfants) suivent, sans re-render.
+      for (const el of cardEls) el.style.transform = `translate(${tx}px, ${ty}px)`;
+      if (clusterEl) clusterEl.style.transform = `translate(${tx}px, ${ty}px)`;
+      for (const el of extraEls) el.style.transform = `translate(${tx}px, ${ty}px)`;
+      paintEdges();
+    };
+    const up = () => {
+      window.removeEventListener("mousemove", move);
+      window.removeEventListener("mouseup", up);
+      for (const el of cardEls) el.style.transform = "";
+      if (clusterEl) clusterEl.style.transform = "";
+      for (const el of extraEls) el.style.transform = "";
+      if (!moved) return;
+      const dx = Math.round(tx), dy = Math.round(ty);
+      setModel((m) => moveTablesBy(m, tableIds, dx, dy));
       commitWorkspace(snapshot);
     };
     window.addEventListener("mousemove", move);
@@ -733,24 +866,25 @@ export default function App() {
   };
 
   const exportSVGString = useCallback(
-    () => buildExportSVG(scopeModel.tables, scopeModel.relations, { title: `MCD — ${scopeName}` }),
-    [scopeModel, scopeName]
+    () => buildExportSVG(scopeModel.tables, scopeModel.relations, { title: `MCD — ${scopeName}`, theme: imageTheme, edgeStyle }),
+    [scopeModel, scopeName, imageTheme, edgeStyle]
   );
 
   const exportPNG = useCallback(() => {
     const svg = exportSVGString();
+    const paper = getImageTheme(imageTheme).paper;
     const img = new Image();
     const blob = new Blob([svg], { type: "image/svg+xml;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     img.onload = () => {
-      // Rendu net 2x : dimensions doublées, fond papier.
+      // Rendu net 2x : dimensions doublées, fond papier du thème.
       const w = (img.width || 1600) * 2;
       const h = (img.height || 1000) * 2;
       const canvas = document.createElement("canvas");
       canvas.width = w;
       canvas.height = h;
       const ctx = canvas.getContext("2d")!;
-      ctx.fillStyle = "#E9E7E1";
+      ctx.fillStyle = paper;
       ctx.fillRect(0, 0, w, h);
       ctx.scale(2, 2);
       ctx.drawImage(img, 0, 0);
@@ -761,7 +895,7 @@ export default function App() {
       }, "image/png");
     };
     img.src = url;
-  }, [exportSVGString, scopeName]);
+  }, [exportSVGString, scopeName, imageTheme]);
 
   const downloadZip = useCallback(() => {
     if (!instanceZipEntries.length) return;
@@ -871,14 +1005,19 @@ export default function App() {
 
   const totalFields = model.tables.reduce((a, t) => a + t.fields.length, 0);
 
-  /** Pastille instance affichée sur chaque carte du canvas. */
+  /** Métadonnées d'affichage par modèle : instance parente (couleur) + nom du
+   * modèle. Sert aux pastilles ET aux zones de regroupement du canvas. */
   const slotMeta = useMemo(() => {
-    const m = new Map<string, { name: string; color?: string }>();
+    const m = new Map<string, { instId?: string; name: string; color?: string; slotName: string }>();
     const instById = new Map(instances.map((i) => [i.id, i]));
     for (const s of slots) {
-      if (!s.instanceId) continue;
-      const inst = instById.get(s.instanceId);
-      if (inst) m.set(s.id, { name: inst.name, color: inst.color });
+      const inst = s.instanceId ? instById.get(s.instanceId) : undefined;
+      m.set(s.id, {
+        instId: inst?.id,
+        name: inst ? inst.name : s.name,
+        color: inst?.color,
+        slotName: s.name,
+      });
     }
     return m;
   }, [slots, instances]);
@@ -1001,6 +1140,7 @@ export default function App() {
           onCanvasMouseDown={camera.onCanvasMouseDown}
           onCanvasClick={() => { if (linkMode) setLinkFromId(null); else setSelectedId(null); }}
           onCardMouseDown={onCardMouseDown}
+          onClusterMouseDown={onClusterMouseDown}
           onCardClick={(t) => { if (linkMode) handleLinkClick(t); else setSelectedId(t.id); }}
           onCardDoubleClick={(t) => { if (!linkMode) centerOn(t); }}
           onHoverEnter={(id) => { if (linkMode) setLinkHoverId(id); }}
@@ -1009,6 +1149,8 @@ export default function App() {
           onClearQuery={() => setQuery("")}
           onAddTable={addTable}
           slotMeta={slotMeta}
+          edgeStyle={edgeStyle}
+          onEdgeStyle={setEdgeStyle}
         />
 
         {showRight && !focusMode && (
@@ -1079,6 +1221,8 @@ export default function App() {
           onDownloadZip={downloadZip}
           onExportPNG={exportPNG}
           onExportSVG={() => download(safeFileName(scopeName, "svg"), exportSVGString(), "image/svg+xml")}
+          imageTheme={imageTheme}
+          onImageTheme={setImageTheme}
         />
       )}
 

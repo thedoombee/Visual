@@ -1,12 +1,17 @@
 import type { DBModel, ImportSlot, Instance } from "../types";
 import { parseAuto } from "../parsers";
 import { EXAMPLE_SQL } from "../examples";
+import { isEdgeStyle, type EdgeStyle } from "../domain/edges";
+import { DEFAULT_IMAGE_THEME_ID, isImageThemeId } from "../domain/exportTheme";
 
 export const STORE_KEY = "mcd-studio-v2";
 export const LEGACY_STORE_KEY = "mcd-studio-v1";
 export const SLOTS_KEY = "mcd-studio-slots-v1";
 export const INSTANCES_KEY = "mcd-studio-instances-v1";
 export const TOUR_KEY = "mcd-studio-tour-v1";
+// Préférences d'affichage (extensions : nouvelles clés, aucun impact existant).
+export const EDGE_STYLE_KEY = "mcd-studio-edge-style-v1";
+export const IMAGE_THEME_KEY = "mcd-studio-image-theme-v1";
 
 // Slot stable du modèle de base : le même id sert au slot ET au tag des tables.
 // (Avant, `loadSlots()` générait un id aléatoire à chaque chargement, jamais
@@ -74,6 +79,36 @@ export function loadInstances(): Instance[] {
 export function saveInstances(instances: Instance[]): void {
   try {
     localStorage.setItem(INSTANCES_KEY, JSON.stringify(instances));
+  } catch { /* ignore */ }
+}
+
+/** Style de trait préféré (canvas + exports) : persiste, défaut "courbe". */
+export function loadEdgeStyle(): EdgeStyle {
+  try {
+    const raw = localStorage.getItem(EDGE_STYLE_KEY);
+    if (isEdgeStyle(raw)) return raw;
+  } catch { /* ignore */ }
+  return "courbe";
+}
+
+export function saveEdgeStyle(style: EdgeStyle): void {
+  try {
+    localStorage.setItem(EDGE_STYLE_KEY, style);
+  } catch { /* ignore */ }
+}
+
+/** Thème d'image PNG/SVG : persiste, défaut "doux". */
+export function loadImageTheme(): string {
+  try {
+    const raw = localStorage.getItem(IMAGE_THEME_KEY);
+    if (isImageThemeId(raw)) return raw;
+  } catch { /* ignore */ }
+  return DEFAULT_IMAGE_THEME_ID;
+}
+
+export function saveImageTheme(id: string): void {
+  try {
+    localStorage.setItem(IMAGE_THEME_KEY, id);
   } catch { /* ignore */ }
 }
 

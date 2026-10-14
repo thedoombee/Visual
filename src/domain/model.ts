@@ -75,6 +75,18 @@ export function moveTableIn(model: DBModel, id: string, x: number, y: number): D
   };
 }
 
+/** Déplace un groupe de tables d'un delta (drag de cadre) : pur, testable. */
+export function moveTablesBy(model: DBModel, ids: readonly string[], dx: number, dy: number): DBModel {
+  if (!ids.length || (dx === 0 && dy === 0)) return model;
+  const wanted = new Set(ids);
+  return {
+    ...model,
+    tables: model.tables.map((t) =>
+      wanted.has(t.id) ? { ...t, x: Math.round(t.x + dx), y: Math.round(t.y + dy) } : t
+    ),
+  };
+}
+
 /** Les tables du slot redeviennent "sans modèle" : toujours visibles. */
 export function untagSlotTables(model: DBModel, slotId: string): DBModel {
   if (!model.tables.some((t) => t.slotId === slotId)) return model;
