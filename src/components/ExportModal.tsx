@@ -1,4 +1,5 @@
 import { listExporters } from "../domain/exporters";
+import { IMAGE_THEMES } from "../domain/exportTheme";
 import type { ImportSlot, Instance } from "../types";
 
 export type ExportScope =
@@ -25,6 +26,9 @@ interface ExportModalProps {
   onDownloadZip: () => void;
   onExportPNG: () => void;
   onExportSVG: () => void;
+  /** Rendu des images PNG/SVG : "doux" (défaut) ou "contraste" (ancien). */
+  imageTheme: string;
+  onImageTheme: (id: string) => void;
 }
 
 export function ExportModal(p: ExportModalProps) {
@@ -81,6 +85,20 @@ export function ExportModal(p: ExportModalProps) {
                 </button>
               ))}
               <button className="exp-tab" onClick={p.onExportPNG} title="Image PNG haute lisibilité du périmètre">PNG</button>
+            </div>
+          </div>
+          <div className="exp-block">
+            <span className="lbl">3 · Rendu image</span>
+            <div className="row">
+              <select
+                value={p.imageTheme}
+                onChange={(e) => p.onImageTheme(e.target.value)}
+                title="Style des images PNG/SVG : « Doux » atténue halos et rouge (moins flashi), « Contrasté » garde l'ancien rendu fort. Le style des liens suit le réglage du canvas."
+              >
+                {IMAGE_THEMES.map((t) => (
+                  <option key={t.id} value={t.id}>{t.label}</option>
+                ))}
+              </select>
             </div>
           </div>
         </div>

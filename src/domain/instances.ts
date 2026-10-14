@@ -101,6 +101,26 @@ export function effectiveHiddenSlotIds(
   return out;
 }
 
+/**
+ * État d'affichage d'UN modèle pour le panneau gauche (SRP : la règle vit ici,
+ * le composant ne fait que l'afficher). Le flag propre `hidden` n'est JAMAIS
+ * écrasé par l'instance : masquer un projet cache ses modèles tout en gardant
+ * leur état individuel (comme des calques groupés). Le ré-affichage du projet
+ * restaure donc exactement l'état d'avant.
+ */
+export function describeSlotVisibility(
+  slot: ImportSlot,
+  instances: Instance[]
+): { ownHidden: boolean; effectiveHidden: boolean; viaInstanceName?: string } {
+  const ownHidden = !!slot.hidden;
+  if (!slot.instanceId) return { ownHidden, effectiveHidden: ownHidden };
+  const inst = instances.find((i) => i.id === slot.instanceId);
+  if (inst?.hidden) {
+    return { ownHidden, effectiveHidden: true, viaInstanceName: inst.name };
+  }
+  return { ownHidden, effectiveHidden: ownHidden };
+}
+
 /** Supprimer une instance : les slots sont conservés mais détachés ("Sans instance"). */
 export function detachInstanceSlots(slots: ImportSlot[], instanceId: string): ImportSlot[] {
   return slots.map((s) => (s.instanceId === instanceId ? { ...s, instanceId: undefined } : s));

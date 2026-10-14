@@ -31,9 +31,9 @@ export function getLayout(id: string): LayoutStrategy | undefined {
   return strategies.get(id);
 }
 
-const GAP_X = CARD_W + 90;
-const GAP_Y = 300;
-const CLUSTER_GAP_Y = 220;
+const GAP_X = CARD_W + 130;
+const GAP_Y = 340;
+const CLUSTER_GAP_Y = 300;
 
 /** Degré d'une table (nb de liens) : les hubs d'abord, plus lisible. */
 function degreeOf(model: DBModel, name: string): number {
@@ -94,13 +94,13 @@ export function smartLayoutModel(model: DBModel, ctx: LayoutCtx): DBModel {
   }
 
   const pos = new Map<string, { x: number; y: number }>();
-  let oy = 60;
+  let oy = 80;
   for (const k of order) {
     const g = groups.get(k)!;
     const cols = Math.max(1, Math.ceil(Math.sqrt(g.tables.length)));
     // Tables triées par degré pour mettre les hubs en haut à gauche.
     g.tables.sort((a, b) => degreeOf(model, b.name) - degreeOf(model, a.name));
-    const sub = gridArrange(g.tables, cols, 60, oy);
+    const sub = gridArrange(g.tables, cols, 80, oy);
     for (const [id, p] of sub) pos.set(id, p);
     const rows = Math.ceil(g.tables.length / cols);
     oy += rows * GAP_Y + CLUSTER_GAP_Y;
