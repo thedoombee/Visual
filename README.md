@@ -49,7 +49,7 @@ mono condensé).
 | **Modèles importés (illimités)** | Section `02 /` du panneau gauche. Chaque modèle a son nom éditable, son badge auto (`Prisma` / `Drizzle` / `SQL` / `Auto`), son compteur de tables sur le canvas, se **plie / déplie** au clic, se **masque / affiche** via `Masquer / Voir`, accepte les exemples (`Prisma / Drizzle / SQL / Fichier…` — `.sql`, `.prisma`, `.ts`, `.txt`, le nom du fichier renomme le modèle). `＋ Ajouter` pose le modèle à droite du canvas sans rien effacer (renommage auto `users → users_2`) ; si le modèle est déjà sur le canvas, le bouton devient `⟳ Modifier` (re-synchronisation stricte : champs fusionnés par nom, tables ajoutées / retirées, liens internes remplacés, FK inter-modèles re-détectées). La croix `✕` retire le modèle **et** supprime ses tables et liens du canvas (en un seul pas d'annulation). |
 | **Liaisons entité → entité** | Deux façons : formulaire **« Relier 2 entités »** (ou **« Relier à une autre entité »** quand une table est sélectionnée, avec champs suggérés : le `xxx_id` qui vise la cible + la PK en face) ou **mode ⇄ Relier sur le canvas** (clic source → clic cible, enchaînable, re-clic / clic dans le vide = annuler le départ, `Echap` / **Quitter** = sortir). Le champ source devient `FK` automatiquement, les doublons sont refusés. |
 | **Cardinalités MCD bilatérales** | Chaque lien porte **deux cardinalités** (`0,1 / 1,1 / 0,N / 1,N`), une collée à chaque entité sur le canvas (point noir = source, point rouge = cible), modifiables séparément dans les listes de relations. Les liaisons créées à la main partent de `1,N — 1,1` ; les imports **infèrent** les cardinalités (`NULL` → `0`, `UNIQUE` → `1`, sinon `N`). Les anciens liens (`N:1`, `1:N`, …) sont migrés automatiquement. Reprises dans les exports SVG / PNG. Style de trait réglable : `courbe` (défaut) / `droite` / `angle`, appliqué au canvas et aux exports, préférence persistée. |
-| **Canvas** | Cartes déplaçables par leur en-tête (y compris les cadres d'instance / modèle `⧉` / `▤`), pan par glisser du fond, **zoom molette libre (20 %–250 %) centré sur le curseur** (pinch trackpad adouci), slider + boutons `−` / `＋`, pastille `%` (clic = 100 %), `Cadrer [F]` (ajuste le zoom à toutes les tables visibles), `Recentrer` (retour caméra d'accueil), `⤢ Plein écran [M]` (canvas seul, barre d'outils réduite). Gestes en direct-DOM pendant le déplacement, un seul pas d'historique à la fin. |
+| **Canvas** | Cartes déplaçables par leur en-tête (y compris les cadres d'instance / modèle `⧉` / `▤`), pan par glisser du fond, **zoom molette libre (10 %–250 %) centré sur le curseur** (pinch trackpad adouci), slider + boutons `−` / `＋`, pastille `%` (clic = 100 %), `Cadrer [F]` (ajuste le zoom à toutes les tables visibles), `Recentrer` (retour caméra d'accueil), grille pointillée verrouillée sur le monde (suit le pan et le zoom), `⤢ Plein écran [M]` (canvas seul, barre d'outils réduite). Gestes en direct-DOM pendant le déplacement, un seul pas d'historique à la fin. |
 | **Barre de commande** | Une seule barre fine en haut : marque, compteurs (`TABLES · LIENS · CHAMPS`, diagnostic avec détail au survol), recherche globale, boutons `⤓ Exporter` + `🔗 Partager` (choix du périmètre et du format dans les modales), annuler / rétablir, galerie `+ Modèles`, bascules de panneaux, plein écran, heure de sauvegarde. |
 | **Barre de statut** | En bas : dernier message d'action, table sélectionnée, niveau de zoom, heure de sauvegarde. |
 | **Édition complète** | Créer / dupliquer (`_copie`) / supprimer / renommer les tables (garde anti-doublon, relations suivies) ; renommer les champs, types via liste déroulante groupée (identifiants, entiers, texte, dates, UUID, JSON… — type inconnu conservé comme `importé`), cases `PK / FK / UQ / NULL`, ajouter / supprimer les champs (les liens orphelins sont purgés) ; **annuler / rétablir** (`Ctrl+Z / Ctrl+Y` ou `Ctrl+Maj+Z`, historique 50 pas). |
@@ -148,7 +148,7 @@ permettent de les changer séparément. Les liaisons manuelles partent de
 
 ### Naviguer sur la grille
 
-- **Zoom** : molette n'importe où sur la grille (20 %–250 %, centré curseur),
+- **Zoom** : molette n'importe où sur la grille (10 %–250 %, centré curseur),
   slider, `−` / `＋`, pastille `%` (= retour 100 %).
 - **Déplacer** : glisser le fond (*pan*), glisser une carte par son en-tête
   (ou un cadre d'instance / modèle par sa poignée).
@@ -327,6 +327,7 @@ même si le serveur dev semble content).
 | `mcd-studio-slots-v1` | Modèles importés du panneau gauche (textes + plié/déplié + masquage + rattachement) |
 | `mcd-studio-instances-v1` | Instances · projets |
 | `mcd-studio-tour-v1` | Visite guidée déjà vue |
+| `mcd-studio-camera-v1` | Vue exacte du canvas (pan + zoom), restaurée au chargement |
 | `mcd-studio-edge-style-v1` | Style de liens (`courbe` / `droite` / `angle`, défaut `courbe`) |
 | `mcd-studio-image-theme-v1` | Rendu image (`doux` / `contraste`, défaut `doux`) |
 
