@@ -59,7 +59,7 @@ mono condensé).
 | **Partage par lien** | Bouton `🔗 Partager` (canvas) ou `🔗` par modèle / instance. Le snapshot complet est encodé dans le hash (`#partage=…`, base64url) : le destinataire voit la version **figée en lecture seule** (bannière `Aperçu partagé figé`, persistance locale désactivée), avec `Adopter ma copie` (enregistrer localement), `⤓ JSON` et `Quitter`. Les modifications ultérieures ne changent pas les liens déjà envoyés : régénérez un lien pour publier une v2. |
 | **Modèles de base** | Galerie `+ Modèles` : 6 packs prêts (`BLOG / CMS`, `E-COMMERCE`, `SAAS / AUTH`, `RÉSEAU SOCIAL`, `ÉCOLE`, `IMMO / RENDEZ-VOUS`). Chacun : **+ Ajouter ↗** (canvas + panneau gauche, jamais de remplacement). Carte **+ / PERSO** : collez votre schema, il rejoint le panneau gauche comme un vrai modèle importé. |
 | **Sauvegarde auto** | Modèle + modèles importés + instances persistés (`localStorage`), heure affichée (`✓ 12:03:11`). Bouton `⌫` de réinitialisation du canvas (avec confirmation). Import / export **JSON** (fichier `.json`, doublons renommés `nom_2`) pour partager ou versionner. |
-| **Visite guidée** | Au tout premier lancement uniquement (aucune donnée stockée), 4 étapes : bienvenue, `01` modèles, `02` liaison ⇄, `03` exports. Rejouable via **? Visite** dans l'aide du panneau gauche. |
+| **Visite guidée** | Au tout premier lancement uniquement (aucune donnée stockée), 6 étapes : bienvenue, `01+02` instances + modèles, `02` liaison ⇄, `03` édition + diagnostic, `04` navigation + recherche, `05` exports + partage. Rejouable via **? Visite** dans l'aide du panneau gauche. |
 
 ---
 
@@ -331,8 +331,7 @@ même si le serveur dev semble content).
 | `mcd-studio-edge-style-v1` | Style de liens (`courbe` / `droite` / `angle`, défaut `courbe`) |
 | `mcd-studio-image-theme-v1` | Rendu image (`doux` / `contraste`, défaut `doux`) |
 
-- Le slot du modèle de base a l'id stable `slot-modele-1` (ses tables le portent
-  en `slotId`, sinon `Masquer / Voir` ne pourrait jamais les cacher).
+- Premier lancement : canvas vide, aucun modèle imposé (démarre via la galerie `+ Modèles`, `+ Modèle` ou `＋ Table vide`). L'id historique `slot-modele-1` reste reconnu pour les sauvegardes existantes.
 - Les anciens modèles sauvegardés peuvent contenir un champ `lots` : il est
   ignoré au chargement, jamais réécrit.
 - Le bouton `⌫` réinitialise le canvas (avec confirmation). L'historique

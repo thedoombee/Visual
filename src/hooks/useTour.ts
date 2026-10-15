@@ -11,22 +11,32 @@ export const TOUR_STEPS: TourStep[] = [
   {
     target: null,
     title: "Bienvenue — visite express",
-    text: "3 mini-fenêtres pour prendre en main : modèles, liaison, exports. Clique Suivant, ou Passer pour explorer seul.",
+    text: "5 mini-fenêtres pour prendre en main : projets + modèles, liaison MCD, édition, navigation, exports + partage. Clique Suivant, ou Passer pour explorer seul.",
   },
   {
     target: ".panel.left",
-    title: "01 · Tes modèles importés",
-    text: "Colle chaque schema (Prisma, Drizzle, SQL) dans son modèle. Plie/déplie au clic sur le bandeau, + Modèle pour en ajouter autant que tu veux, puis ＋ Ajouter pour l'envoyer sur la grille.",
+    title: "01 · Instances + 02 · Modèles",
+    text: "Range tes schemas par projet : + Instance (Masquer / Isoler / ▦ ranger / ZIP / lien). Colle chaque schema Prisma, Drizzle ou SQL dans son modèle (badge auto, + Ajouter à droite du canvas, ⟳ Modifier pour re-synchroniser), ou démarre via + Modèles (6 packs + carte PERSO).",
   },
   {
     target: "#tour-link-btn",
     title: "02 · Relie sur la grille",
-    text: "Clique ce bouton ⇄ Relier, puis l'entité source et l'entité cible directement sur le canvas. Champs suggérés, cardinalités MCD 1,N — 1,1 posées près de chaque entité.",
+    text: "Clique ⇄ Relier, puis l'entité source et l'entité cible sur le canvas (mode enchaînable, re-clic = annuler, Echap = quitter). Champ FK suggéré, cardinalités MCD 1,N — 1,1 posées près de chaque entité, liens auto-détectés entre modèles.",
+  },
+  {
+    target: ".panel.right",
+    title: "03 · Édite + diagnostique",
+    text: "Panneau Édition : tables (créer / dupliquer / renommer), champs (types, PK / FK / UQ / NULL), relations avec 2 cardinalités 0,1 / 1,1 / 0,N / 1,N + style courbe / droite / angle. Diagnostic ERR / WARN intégré, annuler / rétablir en 1 pas (Ctrl+Z / Ctrl+Y).",
+  },
+  {
+    target: ".canvas-wrap",
+    title: "04 · Navigue + cherche",
+    text: "Molette = zoom 10–250 % vers le curseur, glisser = déplacer, Cadrer [F] + ▦ Auto-layout par instance, double-clic = centrer. Recherche globale dans la barre du haut : cartes non concordantes grisées, pastilles cliquables.",
   },
   {
     target: "#tour-export",
-    title: "03 · Exporte tout",
-    text: "Onglets SQL / Prisma / Drizzle / JSON sur tout le canvas, plus SVG et PNG. La barre du bas suit ta sélection, ton zoom et tes actions. Bon MCD !",
+    title: "05 · Exporte + partage",
+    text: "⤓ Exporter : périmètre canvas / instance / modèle, formats SQL / Prisma / Drizzle / JSON / SVG / PNG (+ ZIP par modèle). 🔗 Partager : lien figé #partage= en lecture seule (Adopter ma copie, ⤓ JSON). Sauvegarde auto locale. Bon MCD !",
   },
 ];
 
@@ -59,7 +69,7 @@ export function useTour() {
       if (!el || !el.offsetParent) { setTourPos(null); return; }
       el.classList.add("tour-glow");
       const r = el.getBoundingClientRect();
-      const W = 300, H = 230, GAP = 12, vw = window.innerWidth, vh = window.innerHeight;
+      const W = 300, H = 330, GAP = 12, vw = window.innerWidth, vh = window.innerHeight;
       const fits = (top: number, left: number) =>
         top >= 8 && left >= 8 && top + H <= vh - 8 && left + W <= vw - 8;
       const overlaps = (top: number, left: number) =>
