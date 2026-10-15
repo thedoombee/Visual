@@ -1,6 +1,4 @@
 import type { DBModel, ImportSlot, Instance } from "../types";
-import { parseAuto } from "../parsers";
-import { EXAMPLE_SQL } from "../examples";
 import { isEdgeStyle, type EdgeStyle } from "../domain/edges";
 import { MAX_ZOOM, MIN_ZOOM } from "../domain/geometry";
 import { DEFAULT_IMAGE_THEME_ID, isImageThemeId } from "../domain/exportTheme";
@@ -16,10 +14,8 @@ export const CAMERA_KEY = "mcd-studio-camera-v1";
 export const EDGE_STYLE_KEY = "mcd-studio-edge-style-v1";
 export const IMAGE_THEME_KEY = "mcd-studio-image-theme-v1";
 
-// Slot stable du modèle de base : le même id sert au slot ET au tag des tables.
-// (Avant, `loadSlots()` générait un id aléatoire à chaque chargement, jamais
-// égal au `slotId` des tables → Masquer/Voir et la suppression ne touchaient
-// jamais le modèle de base.)
+// Slot stable historique du modèle de base (conservé pour compatibilité :
+// les sauvegardes existantes peuvent encore taguer des tables avec cet id).
 export const DEFAULT_SLOT_ID = "slot-modele-1";
 
 export function initialModel(): DBModel {
@@ -35,13 +31,10 @@ export function initialModel(): DBModel {
       }
     }
   } catch { /* ignore */ }
-  // Premier lancement : les tables du modèle de base appartiennent au slot
-  // par défaut, sinon Masquer/Voir ne peut jamais les cacher.
-  const base = parseAuto(EXAMPLE_SQL).model;
-  return {
-    tables: base.tables.map((t) => ({ ...t, slotId: DEFAULT_SLOT_ID })),
-    relations: base.relations,
-  };
+  // Premier lancement : canvas vide, aucun modèle imposé. L'utilisateur
+  // démarre via la galerie (+ Modèles), le panneau gauche (+ Modèle) ou
+  // une table vide — l'état vide du canvas le guide.
+  return { tables: [], relations: [] };
 }
 
 export function loadSlots(): ImportSlot[] {
@@ -52,7 +45,8 @@ export function loadSlots(): ImportSlot[] {
     // Un tableau vide sauvegardé = l'utilisateur a tout retiré : on le respecte.
     if (Array.isArray(arr)) return arr;
   } catch { /* ignore */ }
-  return [{ id: DEFAULT_SLOT_ID, name: "Modèle 1", source: EXAMPLE_SQL, collapsed: false, msg: "" }];
+  // Premier lancement : aucun modèle imposé (le canvas démarre vide).
+  return [];
 }
 
 export function saveModel(model: DBModel): string {

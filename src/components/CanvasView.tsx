@@ -252,7 +252,7 @@ export function CanvasView(p: CanvasViewProps) {
           {p.model.tables.length === 0 && (
             <div className="empty">
               <h2>Canvas <span>vide+</span></h2>
-              <p>Colle un schema puis <em>« Générer le MCD »</em>, ou démarre d'un modèle de base tout relié.</p>
+              <p>Colle un schema dans le panneau Modèles puis <em>＋ Ajouter</em>, ou démarre d'un modèle de base tout relié.</p>
               <div className="row">
                 <button className="btn primary" onClick={p.onGallery}>+ Choisir un modèle</button>
                 <button className="btn" onClick={p.onAddTable}>＋ Table vide</button>
