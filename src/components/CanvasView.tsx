@@ -2,7 +2,7 @@ import { useMemo } from "react";
 import type { MouseEvent } from "react";
 import type { DBModel, DBTable } from "../types";
 import { mcdCards } from "../types";
-import { CARD_W, cardH, fieldY } from "../domain/geometry";
+import { CARD_W, cardH, fieldY, GRID_STEP, MAX_ZOOM, MIN_ZOOM } from "../domain/geometry";
 import { EDGE_STYLES, edgePathFor, type EdgeStyle } from "../domain/edges";
 import type { Camera } from "../hooks/useCamera";
 
@@ -113,7 +113,7 @@ export function CanvasView(p: CanvasViewProps) {
       <div className="toolbar">
         <button className="btn small" onClick={() => p.onZoomCentered(p.cam.z - 0.1)}>−</button>
         <input
-          className="zoom-slider" type="range" min={20} max={250} step={5}
+          className="zoom-slider" type="range" min={Math.round(MIN_ZOOM * 100)} max={Math.round(MAX_ZOOM * 100)} step={5}
           value={Math.round(p.cam.z * 100)}
           onChange={(e) => p.onZoomCentered(Number(e.target.value) / 100)}
           title="Molette = zoom libre vers le curseur"
@@ -172,7 +172,16 @@ export function CanvasView(p: CanvasViewProps) {
           <button className="btn small danger" onClick={p.onQuitLinkMode}>Quitter [Esc]</button>
         </div>
       )}
-      <div ref={onCanvasNode} className={`canvas ${p.linkMode ? "linking" : ""}`} onMouseDown={p.onCanvasMouseDown} onClick={p.onCanvasClick}>
+      <div
+        ref={onCanvasNode}
+        className={`canvas ${p.linkMode ? "linking" : ""}`}
+        // Grille pointillée verrouillée sur le monde : elle suit le pan et le
+        // zoom comme un vrai plateau infini (le CSS ne sert que d'avant-montage).
+        style={{
+          backgroundPosition: `${p.cam.x}px ${p.cam.y}px`,
+          backgroundSize: `${GRID_STEP * p.cam.z}px ${GRID_STEP * p.cam.z}px`,
+        }}
+        onMouseDown={p.onCanvasMouseDown} onClick={p.onCanvasClick}>
         <div className="canvas-bgword">SCHEMA<span>+</span></div>
         <div ref={onWorldNode} className="world" style={{ transform: `translate(${p.cam.x}px, ${p.cam.y}px) scale(${p.cam.z})` }}>
           {instClusters.map((c) => (

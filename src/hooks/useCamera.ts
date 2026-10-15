@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { MouseEvent } from "react";
 import type { DBTable } from "../types";
-import { CARD_W, cardH } from "../domain/geometry";
+import { CARD_W, cardH, MAX_ZOOM, MIN_ZOOM } from "../domain/geometry";
 
 export interface Camera {
   x: number;
@@ -17,8 +17,8 @@ const HOME: Camera = { x: 20, y: 20, z: 1 };
  * Possède ses refs DOM (jamais exposées en props) + callbacks d'attache.
  * `tables` = tables à cadrer (visibles, sinon toutes).
  */
-export function useCamera(tables: DBTable[]) {
-  const [cam, setCam] = useState<Camera>(HOME);
+export function useCamera(tables: DBTable[], initialCam?: Camera) {
+  const [cam, setCam] = useState<Camera>(initialCam ?? HOME);
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLDivElement | null>(null);
   const worldRef = useRef<HTMLDivElement | null>(null);
@@ -64,7 +64,7 @@ export function useCamera(tables: DBTable[]) {
         if (!w) return;
         setCam((c) => {
           const factor = Math.exp(-w.d * w.sens);
-          const z = Math.min(2.5, Math.max(0.2, +(c.z * factor).toFixed(3)));
+          const z = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, +(c.z * factor).toFixed(3)));
           if (z === c.z) return c;
           const wx = (w.mx - c.x) / c.z;
           const wy = (w.my - c.y) / c.z;
@@ -82,7 +82,7 @@ export function useCamera(tables: DBTable[]) {
     const W = el?.clientWidth || 800;
     const H = el?.clientHeight || 600;
     setCam((c) => {
-      const z = Math.min(2.5, Math.max(0.2, +nextZ.toFixed(2)));
+      const z = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, +nextZ.toFixed(2)));
       const wx = (W / 2 - c.x) / c.z;
       const wy = (H / 2 - c.y) / c.z;
       return { x: W / 2 - wx * z, y: H / 2 - wy * z, z };
@@ -102,7 +102,7 @@ export function useCamera(tables: DBTable[]) {
     const minY = Math.min(...tables.map((t) => t.y));
     const maxX = Math.max(...tables.map((t) => t.x + CARD_W));
     const maxY = Math.max(...tables.map((t) => t.y + cardH(t)));
-    const z = Math.min(2.5, Math.max(0.2, Math.min((W - 80) / Math.max(1, maxX - minX), (H - 80) / Math.max(1, maxY - minY))));
+    const z = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, Math.min((W - 80) / Math.max(1, maxX - minX), (H - 80) / Math.max(1, maxY - minY))));
     setCam({ x: 40 - minX * z, y: 40 - minY * z, z: +z.toFixed(2) });
   };
   const fitViewSoon = () => setTimeout(() => fitView(), 60);
@@ -118,6 +118,7 @@ export function useCamera(tables: DBTable[]) {
   const onCanvasMouseDown = (e: MouseEvent) => {
     if ((e.target as HTMLElement).closest(".table-card")) return;
     const world = worldRef.current;
+    const canvasEl = canvasRef.current;
     if (!world) return;
     const sx = e.clientX, sy = e.clientY, cx = cam.x, cy = cam.y, z = cam.z;
     let alive = true;
@@ -128,6 +129,8 @@ export function useCamera(tables: DBTable[]) {
       ly = cy + (ev.clientY - sy);
       // Déplacement pur compositeur : aucun re-render, aucun repaint du fond.
       world.style.transform = `translate(${lx}px, ${ly}px) scale(${z})`;
+      // La grille pointillée suit la caméra en direct (rendu final via React).
+      canvasEl?.style.setProperty("background-position", `${lx}px ${ly}px`);
     };
     const up = () => {
       alive = false;

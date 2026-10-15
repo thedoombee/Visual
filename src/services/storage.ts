@@ -2,6 +2,7 @@ import type { DBModel, ImportSlot, Instance } from "../types";
 import { parseAuto } from "../parsers";
 import { EXAMPLE_SQL } from "../examples";
 import { isEdgeStyle, type EdgeStyle } from "../domain/edges";
+import { MAX_ZOOM, MIN_ZOOM } from "../domain/geometry";
 import { DEFAULT_IMAGE_THEME_ID, isImageThemeId } from "../domain/exportTheme";
 
 export const STORE_KEY = "mcd-studio-v2";
@@ -9,6 +10,8 @@ export const LEGACY_STORE_KEY = "mcd-studio-v1";
 export const SLOTS_KEY = "mcd-studio-slots-v1";
 export const INSTANCES_KEY = "mcd-studio-instances-v1";
 export const TOUR_KEY = "mcd-studio-tour-v1";
+// Vue exacte du canvas (pan + zoom) : la disposition à l'écran survit au refresh.
+export const CAMERA_KEY = "mcd-studio-camera-v1";
 // Préférences d'affichage (extensions : nouvelles clés, aucun impact existant).
 export const EDGE_STYLE_KEY = "mcd-studio-edge-style-v1";
 export const IMAGE_THEME_KEY = "mcd-studio-image-theme-v1";
@@ -129,5 +132,37 @@ export function shouldShowTour(): boolean {
 export function markTourSeen(): void {
   try {
     localStorage.setItem(TOUR_KEY, "done");
+  } catch { /* ignore */ }
+}
+
+export interface PersistedCamera {
+  x: number;
+  y: number;
+  z: number;
+}
+
+/** Vue du canvas restaurée au chargement : valeurs validées + bornées. */
+export function loadCamera(): PersistedCamera | null {
+  try {
+    const raw = localStorage.getItem(CAMERA_KEY);
+    if (!raw) return null;
+    const c = JSON.parse(raw) as Partial<PersistedCamera>;
+    if (![c.x, c.y, c.z].every((v) => typeof v === "number" && Number.isFinite(v))) return null;
+    const clampPan = (v: number) => Math.min(100000, Math.max(-100000, Math.round(v)));
+    return {
+      x: clampPan(c.x as number),
+      y: clampPan(c.y as number),
+      z: Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, c.z as number)),
+    };
+  } catch { /* ignore */ }
+  return null;
+}
+
+export function saveCamera(c: { x: number; y: number; z: number }): void {
+  try {
+    localStorage.setItem(
+      CAMERA_KEY,
+      JSON.stringify({ x: Math.round(c.x), y: Math.round(c.y), z: +c.z.toFixed(3) })
+    );
   } catch { /* ignore */ }
 }

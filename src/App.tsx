@@ -58,10 +58,12 @@ import {
 import {
   initialModel,
   INSTANCES_KEY,
+  loadCamera,
   loadEdgeStyle,
   loadImageTheme,
   loadInstances,
   loadSlots,
+  saveCamera,
   saveEdgeStyle,
   saveImageTheme,
   saveInstances,
@@ -377,7 +379,31 @@ export default function App() {
   const issues = useMemo(() => validateModel(model), [model]);
 
   // ---------- camera ----------
-  const camera = useCamera(visibleTables.length ? visibleTables : model.tables);
+  // La vue exacte (pan + zoom) est restaurée au chargement : la disposition
+  // à l'écran ne bouge plus au refresh. Lecture unique (StrictMode-clean).
+  const [initialCam] = useState(() => loadCamera() ?? undefined);
+  const camera = useCamera(visibleTables.length ? visibleTables : model.tables, initialCam);
+  // Sauvegarde différée de la vue (même rythme que le modèle).
+  useEffect(() => {
+    if (isSharedView) return;
+    const id = setTimeout(() => saveCamera(camera.cam), 400);
+    return () => clearTimeout(id);
+  }, [camera.cam, isSharedView]);
+  // Flush synchrone à la fermeture : un refresh dans les 400 ms du debounce
+  // ne perd plus ni le dernier déplacement ni la dernière vue.
+  const modelRef = useRef(model);
+  modelRef.current = model;
+  const camRef = useRef(camera.cam);
+  camRef.current = camera.cam;
+  useEffect(() => {
+    if (isSharedView) return;
+    const flush = () => {
+      saveModel(modelRef.current);
+      saveCamera(camRef.current);
+    };
+    window.addEventListener("pagehide", flush);
+    return () => window.removeEventListener("pagehide", flush);
+  }, [isSharedView]);
   // Le drag repeint aussi les liens en direct : on branche les deux refs monde.
   const attachWorldNode = (el: HTMLDivElement | null) => {
     camera.attachWorld(el);

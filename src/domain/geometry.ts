@@ -5,6 +5,13 @@ export const CARD_W = 236;
 export const HEADER_H = 36;
 export const ROW_H = 27;
 
+// Grille pointillée du canvas : pas en px (doit matcher le `background-size`
+// de `.canvas` dans index.css, surchargé en ligne par la caméra).
+export const GRID_STEP = 26;
+// Bornes du zoom, partagées par la molette, le slider et le cadrage.
+export const MIN_ZOOM = 0.1;
+export const MAX_ZOOM = 2.5;
+
 export function cardH(t: DBTable) {
   return HEADER_H + t.fields.length * ROW_H + 8;
 }
