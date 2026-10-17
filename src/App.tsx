@@ -37,12 +37,15 @@ import {
 import {
   assignSlotToInstance,
   createInstance,
+  crossInstanceRelations,
   detachInstanceSlots,
   effectiveHiddenSlotIds,
+  instanceOfSlot,
   renameInstance,
   slotsOfInstance,
   subModelForInstance,
   subModelForSlot,
+  tablesCanCommunicate,
   toggleInstanceCollapsed,
   toggleInstanceHidden,
 } from "./domain/instances";
@@ -215,6 +218,21 @@ export default function App() {
   );
   const slotTableCount = useMemo(() => slotTableCounts(model), [model]);
 
+  // Étanchéité entre instances : deux projets ne communiquent pas. Ce prédicat
+  // est branché sur la détection FK auto (merge + sync) ; il ne bloque jamais
+  // les tables hors instance (manuelles, « Sans instance »). Règle pure :
+  // voir `tablesCanCommunicate` dans `domain/instances.ts`.
+  const allowCrossLink = useCallback(
+    (src: DBTable, target: DBTable) => tablesCanCommunicate(slots, src, target),
+    [slots]
+  );
+  /** Message clair quand on tente de lier deux tables de projets distincts. */
+  const communicationError = useCallback((a: DBTable, b: DBTable): string | null => {
+    if (tablesCanCommunicate(slots, a, b)) return null;
+    const nameOf = (iid?: string) => instances.find((i) => i.id === iid)?.name || "sans nom";
+    return `« ${nameOf(instanceOfSlot(slots, a.slotId))} » et « ${nameOf(instanceOfSlot(slots, b.slotId))} » sont deux projets distincts : les instances ne communiquent pas. Relie des tables d'un même projet (ou hors instance).`;
+  }, [slots, instances]);
+
   const openExport = useCallback(() => {
     setExportScope({ kind: "canvas" });
     setExportOpen(true);
@@ -376,7 +394,18 @@ export default function App() {
   }, [undo, redo, model, exportOpen, shareTarget, showGallery]);
 
   // ---------- validation ----------
-  const issues = useMemo(() => validateModel(model), [model]);
+  // Règles internes au modèle + règle de projet : un lien qui traverse deux
+  // instances (héritage d'un rangement a posteriori) est signalé, jamais créé.
+  const issues = useMemo(() => {
+    const base = validateModel(model);
+    return [
+      ...base,
+      ...crossInstanceRelations(model, slots, instances).map(({ relation, fromInstance, toInstance }) => ({
+        level: "warn" as const,
+        text: `Lien inter-projets : ${relation.fromTable} — ${relation.toTable} traverse « ${fromInstance.name || "sans nom"} » et « ${toInstance.name || "sans nom"} » — les instances ne communiquent pas (supprime le lien ou range les modèles ensemble).`,
+      })),
+    ];
+  }, [model, slots, instances]);
 
   // ---------- camera ----------
   // La vue exacte (pan + zoom) est restaurée au chargement : la disposition
@@ -437,7 +466,7 @@ export default function App() {
     }
     const alreadyOnCanvas = model.tables.filter((t) => t.slotId === slot.id).length;
     if (alreadyOnCanvas > 0) {
-      const { model: synced, ids, stats } = syncSlotTables(model, m, slot.id);
+      const { model: synced, ids, stats } = syncSlotTables(model, m, slot.id, allowCrossLink);
       applyWorkspace((w) => ({ ...w, model: synced }));
       setSelectedId(ids[0] ?? null);
       const bits: string[] = [];
@@ -450,13 +479,13 @@ export default function App() {
       camera.fitViewSoon();
       return;
     }
-    const { model: merged, ids, autoLinked } = mergeModel(model, m, slot.id);
+    const { model: merged, ids, autoLinked } = mergeModel(model, m, slot.id, allowCrossLink);
     applyWorkspace((w) => ({ ...w, model: merged }));
     setSelectedId(ids[0] ?? null);
     updateSlot(slot.id, { msg: `+ ${m.tables.length} table(s) ajoutée(s) [${k}]${autoLinked ? ` · ⇄ ${autoLinked} lien(s) auto.` : "."}` });
     setParseMsg(`« ${slot.name} » ajouté${autoLinked ? ` : ${autoLinked} lien(s) FK détecté(s) vers les tables présentes` : " : relie ses entités à la main avec leurs cardinalités MCD"}.`);
     camera.fitViewSoon();
-  }, [applyWorkspace, model, updateSlot, camera]);
+  }, [applyWorkspace, model, updateSlot, camera, allowCrossLink]);
 
   // ---------- tables ----------
   const addTable = useCallback(() => {
@@ -532,6 +561,13 @@ export default function App() {
   const addRelation = useCallback(() => {
     const { fromTable, fromField, toTable, toField, cardA, cardB } = relForm;
     if (!fromTable || !fromField || !toTable || !toField) return;
+    const src = model.tables.find((t) => t.name === fromTable);
+    const dst = model.tables.find((t) => t.name === toTable);
+    const blocked = src && dst ? communicationError(src, dst) : null;
+    if (blocked) {
+      setParseMsg(blocked);
+      return;
+    }
     if (isDuplicateRelation(model.relations, fromTable, fromField, toTable, toField)) {
       setParseMsg(`Lien déjà existant : ${fromTable}.${fromField} → ${toTable}.${toField}.`);
       return;
@@ -541,7 +577,7 @@ export default function App() {
     };
     apply((m) => addRelationTo(m, rel));
     setRelForm((f) => ({ ...f, fromField: "", toField: "" }));
-  }, [relForm, apply, model]);
+  }, [relForm, apply, model, communicationError]);
 
   const deleteRelation = useCallback((id: string) => {
     apply((m) => removeRelation(m, id));
@@ -564,6 +600,12 @@ export default function App() {
     }
     const src = model.tables.find((x) => x.id === linkFromId);
     if (!src) { setLinkFromId(t.id); return; }
+    const blocked = communicationError(src, t);
+    if (blocked) {
+      setParseMsg(blocked);
+      setLinkFromId(null);
+      return;
+    }
     const fromField = suggestFromField(src.name, t.name);
     const toField = suggestToField(t.name);
     if (!fromField || !toField) {
@@ -589,7 +631,7 @@ export default function App() {
     setParseMsg(`Lié : ${src.name}.${fromField} (${rel.fromCard}) — ${t.name}.${toField} (${rel.toCard}). Modifie les cardinalités dans Édition.`);
     setSelectedId(src.id);
     setLinkFromId(null); // le mode reste actif pour enchaîner
-  }, [linkFromId, model, apply, suggestFromField, suggestToField]);
+  }, [linkFromId, model, apply, suggestFromField, suggestToField, communicationError]);
 
   // ---------- galerie : un modèle choisi S'AJOUTE aux autres (jamais de remplacement) ----------
   // Il rejoint le canvas (à droite) + un slot du panneau gauche, en UN seul

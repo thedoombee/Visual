@@ -27,10 +27,10 @@ export function createInstance(names: string[], colorSeed = 0): Instance {
   };
 }
 
+// Nom stocké tel que tapé (comme les modèles) : un nom vide reste autorisé,
+// sinon impossible d'effacer la dernière lettre avant de retaper le nouveau nom.
 export function renameInstance(instances: Instance[], id: string, name: string): Instance[] {
-  const clean = name.trim().slice(0, 40);
-  if (!clean) return instances;
-  return instances.map((i) => (i.id === id ? { ...i, name: clean } : i));
+  return instances.map((i) => (i.id === id ? { ...i, name: name.slice(0, 40) } : i));
 }
 
 export function toggleInstanceHidden(instances: Instance[], id: string): Instance[] {
@@ -66,6 +66,51 @@ export function tablesOfInstance(model: DBModel, slots: ImportSlot[], instanceId
 /** Tables rattachées à un slot (= un modèle). */
 export function tablesOfSlot(model: DBModel, slotId: string): DBTable[] {
   return model.tables.filter((t) => t.slotId === slotId);
+}
+
+// ---------- étanchéité entre instances ----------
+// Deux projets ne communiquent JAMAIS : aucun lien (manuel ou auto) entre une
+// table de l'instance A et une table de l'instance B. Une table hors instance
+// (manuelle ou « Sans instance ») reste libre de tout lien. Règles pures,
+// posées ici une fois pour toutes (Open/Closed : les appelants s'y conforment).
+
+/** Instance d'un slot. `undefined` = modèle hors instance (ou slot inconnu). */
+export function instanceOfSlot(slots: ImportSlot[], slotId?: string): string | undefined {
+  if (!slotId) return undefined;
+  return slots.find((s) => s.id === slotId)?.instanceId;
+}
+
+/** Communication autorisée entre deux tables : refusée seulement quand chacune
+ *  appartient à une instance DIFFÉRENTE. */
+export function tablesCanCommunicate(
+  slots: ImportSlot[],
+  a: Pick<DBTable, "slotId">,
+  b: Pick<DBTable, "slotId">
+): boolean {
+  const ia = instanceOfSlot(slots, a.slotId);
+  const ib = instanceOfSlot(slots, b.slotId);
+  return !ia || !ib || ia === ib;
+}
+
+/** Liens existants qui traversent deux instances différentes (état hérité d'un
+ *  rangement a posteriori) : jamais créés par l'app, signalés au diagnostic. */
+export function crossInstanceRelations(
+  model: DBModel,
+  slots: ImportSlot[],
+  instances: Instance[]
+): Array<{ relation: DBRelation; fromInstance: Instance; toInstance: Instance }> {
+  const instOfTable = (name: string): Instance | undefined => {
+    const t = model.tables.find((x) => x.name === name);
+    const iid = instanceOfSlot(slots, t?.slotId);
+    return iid ? instances.find((i) => i.id === iid) : undefined;
+  };
+  const out: Array<{ relation: DBRelation; fromInstance: Instance; toInstance: Instance }> = [];
+  for (const r of model.relations) {
+    const a = instOfTable(r.fromTable);
+    const b = instOfTable(r.toTable);
+    if (a && b && a.id !== b.id) out.push({ relation: r, fromInstance: a, toInstance: b });
+  }
+  return out;
 }
 
 /** Sous-modèle d'un slot : ses tables + les liens internes au slot. */

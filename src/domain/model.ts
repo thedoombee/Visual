@@ -1,6 +1,6 @@
 import type { DBField, DBModel, DBRelation, DBTable, ImportSlot } from "../types";
 import { uid } from "../types";
-import { CARD_W } from "./geometry";
+import { CARD_W, cardH } from "./geometry";
 
 export interface ModelIssue {
   level: "err" | "warn";
@@ -288,11 +288,14 @@ export function guessFkTarget(fieldName: string, tableNames: string[]): string |
  * Détecte les FK implicites CROISÉES entre tables entrantes et tables déjà
  * présentes (liaison seulement : le champ FK doit exister, on ne crée rien).
  * Couvre les 2 sens : entrant→existant et existant→entrant.
+ * `allow` (optionnel) filtre les paires : sert à interdire les liens entre
+ * instances différentes sans modifier la détection (Open/Closed).
  */
 export function detectCrossRelations(
   incomingTables: DBTable[],
   baseTables: DBTable[],
-  existingRelations: DBRelation[]
+  existingRelations: DBRelation[],
+  allow?: (src: DBTable, target: DBTable) => boolean
 ): DBRelation[] {
   const incomingNames = new Set(incomingTables.map((t) => t.name));
   const baseNames = new Set(baseTables.map((t) => t.name));
@@ -311,6 +314,7 @@ export function detectCrossRelations(
         if (!cand || cand === src.name || !validTargets.has(cand)) continue;
         const target = byName.get(cand);
         if (!target) continue;
+        if (allow && !allow(src, target)) continue;
         const toField = target.fields.find((x) => x.pk)?.name ?? target.fields[0]?.name;
         if (!toField) continue;
         const key = `${src.name}.${f.name}→${cand}.${toField}`;
@@ -414,7 +418,12 @@ export interface SyncResult {
  * + détection des FK croisées vers les tables déjà présentes (cartes Merise
  * inférées depuis nullable/unique, sans toucher aux liens existants).
  */
-export function mergeModel(base: DBModel, parsed: DBModel, slotId?: string): MergeResult {
+export function mergeModel(
+  base: DBModel,
+  parsed: DBModel,
+  slotId?: string,
+  allowCrossLink?: (src: DBTable, target: DBTable) => boolean
+): MergeResult {
   const existing = new Set(base.tables.map((t) => t.name));
   const rename = new Map<string, string>();
   const incoming: DBModel = {
@@ -443,10 +452,12 @@ export function mergeModel(base: DBModel, parsed: DBModel, slotId?: string): Mer
   const dx = Math.max(0, maxX + 120 - 60);
   for (const t of incoming.tables) t.x += dx;
   // FK croisées : xxx_id du nouveau modèle → anciennes tables et inversement.
-  const cross = detectCrossRelations(incoming.tables, base.tables, [
-    ...base.relations,
-    ...incoming.relations,
-  ]);
+  const cross = detectCrossRelations(
+    incoming.tables,
+    base.tables,
+    [...base.relations, ...incoming.relations],
+    allowCrossLink
+  );
   // Marque les champs sources comme FK (copies, sans muter `base`).
   const baseCopy: DBTable[] = base.tables.map((t) => ({
     ...t,
@@ -470,30 +481,59 @@ export function mergeModel(base: DBModel, parsed: DBModel, slotId?: string): Mer
 }
 
 /**
+ * Positionne les tables fraîchement ajoutées par une sync JUSTE À CÔTÉ des
+ * tables existantes du modèle (même zone sur la grille), empilées à droite
+ * sans chevauchement. Les positions existantes ne sont jamais touchées : une
+ * sync ne doit pas étendre le modèle sur tout le canvas.
+ */
+function placeFreshTables(existing: DBTable[], fresh: DBTable[]): DBTable[] {
+  if (!fresh.length) return fresh;
+  const anchorX = existing.length
+    ? Math.max(...existing.map((t) => t.x + CARD_W)) + 80
+    : 60;
+  const anchorY = existing.length ? Math.min(...existing.map((t) => t.y)) : 60;
+  // Bloc quasi carré : colonne de `rows` cartes, puis colonne suivante.
+  const rows = Math.max(1, Math.ceil(Math.sqrt(fresh.length)));
+  const colY: number[] = [];
+  const out: DBTable[] = [];
+  fresh.forEach((t, i) => {
+    const col = Math.floor(i / rows);
+    const y = colY[col] ?? anchorY;
+    out.push({ ...t, x: anchorX + col * (CARD_W + 60), y });
+    colY[col] = y + cardH(t) + 40;
+  });
+  return out;
+}
+
+/**
  * Sync stricte d'un slot déjà sur la grille (bouton « Modifier ») :
  * - table du source toujours là → champs fusionnés par nom (ids + x,y conservés) ;
- * - table nouvelle → ajoutée à droite ; table disparue → retirée + liens purgés ;
+ * - table nouvelle → posée à côté des tables du modèle (sa zone ne s'étend
+ *   pas sur tout le canvas) ; table disparue → retirée + liens purgés ;
  * - liens hors slot intacts ; liens internes remplacés par le source (cartes
- *   manuelles conservées quand le lien existe encore) ; FK croisées re-détectées.
+ *   manuelles conservées quand le lien existe encore) ; FK croisées re-détectées
+ *   (sauf entre instances différentes, voir `allowCrossLink`).
  */
-export function syncSlotTables(base: DBModel, parsed: DBModel, slotId: string): SyncResult {
+export function syncSlotTables(
+  base: DBModel,
+  parsed: DBModel,
+  slotId: string,
+  allowCrossLink?: (src: DBTable, target: DBTable) => boolean
+): SyncResult {
   const existing = base.tables.filter((t) => t.slotId === slotId);
   const others = base.tables.filter((t) => t.slotId !== slotId);
   const existingByName = new Map(existing.map((t) => [t.name, t]));
   const parsedByName = new Map<string, (typeof parsed.tables)[number]>();
   for (const t of parsed.tables) if (!parsedByName.has(t.name)) parsedByName.set(t.name, t);
 
-  const maxX = base.tables.length ? Math.max(...base.tables.map((t) => t.x + CARD_W)) : 0;
-  const dx = Math.max(0, maxX + 120 - 60);
   const nextSlotTables: DBTable[] = [];
+  const fresh: DBTable[] = [];
   const ids: string[] = [];
-  let added = 0;
   let updated = 0;
   for (const pt of parsedByName.values()) {
     const ex = existingByName.get(pt.name);
     if (ex) {
       const exByName = new Map(ex.fields.map((f) => [f.name, f]));
-      const parsedFk = new Map(pt.fields.map((f) => [f.name, !!f.fk]));
       const fields: DBTable["fields"] = pt.fields.map((pf) => {
         const ef = exByName.get(pf.name);
         if (ef) return { ...ef, type: pf.type, pk: pf.pk, unique: pf.unique, nullable: pf.nullable, fk: pf.fk || ef.fk };
@@ -502,20 +542,20 @@ export function syncSlotTables(base: DBModel, parsed: DBModel, slotId: string): 
       nextSlotTables.push({ ...ex, fields, slotId });
       ids.push(ex.id);
       updated++;
-      void parsedFk;
     } else {
       const nt: DBTable = {
         ...pt,
         id: uid("t"),
         slotId,
-        x: pt.x + dx,
         fields: pt.fields.map((f) => ({ ...f, id: uid("f") })),
       };
-      nextSlotTables.push(nt);
+      fresh.push(nt);
       ids.push(nt.id);
-      added++;
     }
   }
+  const placedFresh = placeFreshTables(existing, fresh);
+  nextSlotTables.push(...placedFresh);
+  const added = placedFresh.length;
   const removed = existing.filter((t) => !parsedByName.has(t.name)).length;
 
   // --- relations ---
@@ -554,7 +594,7 @@ export function syncSlotTables(base: DBModel, parsed: DBModel, slotId: string): 
     addedParsed.push({ ...pr, id: uid("rel") });
     keptKeys.add(key);
   }
-  const cross = detectCrossRelations(nextSlotTables, others, [...kept, ...addedParsed]);
+  const cross = detectCrossRelations(nextSlotTables, others, [...kept, ...addedParsed], allowCrossLink);
   const relations = [...kept, ...addedParsed, ...cross];
 
   // --- cohérence FK : source d'un lien → fk, sinon drapeau du source ---
