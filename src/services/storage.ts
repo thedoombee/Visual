@@ -2,6 +2,7 @@ import type { DBModel, ImportSlot, Instance } from "../types";
 import { isEdgeStyle, type EdgeStyle } from "../domain/edges";
 import { MAX_ZOOM, MIN_ZOOM } from "../domain/geometry";
 import { DEFAULT_IMAGE_THEME_ID, isImageThemeId } from "../domain/exportTheme";
+import { normalizeRelationIds } from "../domain/relations";
 
 export const STORE_KEY = "mcd-studio-v2";
 export const LEGACY_STORE_KEY = "mcd-studio-v1";
@@ -27,7 +28,8 @@ export function initialModel(): DBModel {
         // Migration : les anciens modèles sauvegardés peuvent contenir des lots, ignorés.
         const clean: DBModel & { lots?: unknown } = { ...parsed };
         delete clean.lots;
-        return clean;
+        // Les liens v1 n'avaient que des noms : on leur donne leurs IDs stables.
+        return normalizeRelationIds(clean);
       }
     }
   } catch { /* ignore */ }

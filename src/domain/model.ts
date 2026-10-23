@@ -1,6 +1,19 @@
 import type { DBField, DBModel, DBRelation, DBTable, ImportSlot } from "../types";
 import { uid } from "../types";
 import { CARD_W, cardH } from "./geometry";
+import {
+  freeScopedTableName,
+  instanceIdOfTable,
+  freeTableNameInSlot,
+  namesCanShareAcrossInstances,
+} from "./naming";
+import {
+  normalizeRelationIds,
+  relationEnds,
+  relationKey,
+  relationTouchesTable,
+  resolveTable,
+} from "./relations";
 
 export interface ModelIssue {
   level: "err" | "warn";
@@ -49,19 +62,21 @@ export function removeTable(model: DBModel, id: string): DBModel {
   if (!t) return model;
   return {
     tables: model.tables.filter((x) => x.id !== id),
-    relations: model.relations.filter((r) => r.fromTable !== t.name && r.toTable !== t.name),
+    relations: model.relations.filter((r) => !relationTouchesTable(r, t)),
   };
 }
 
 export function renameTableIn(model: DBModel, id: string, clean: string): DBModel {
   const old = model.tables.find((t) => t.id === id);
   if (!old) return model;
+  const touches = (tableId: string | undefined, name: string) =>
+    tableId ? tableId === id : name === old.name;
   return {
     tables: model.tables.map((t) => (t.id === id ? { ...t, name: clean } : t)),
     relations: model.relations.map((r) => ({
       ...r,
-      fromTable: r.fromTable === old.name ? clean : r.fromTable,
-      toTable: r.toTable === old.name ? clean : r.toTable,
+      fromTable: touches(r.fromTableId, r.fromTable) ? clean : r.fromTable,
+      toTable: touches(r.toTableId, r.toTable) ? clean : r.toTable,
     })),
   };
 }
@@ -102,12 +117,14 @@ export function untagSlotTables(model: DBModel, slotId: string): DBModel {
 export function removeSlotTables(model: DBModel, slotId: string): DBModel {
   const gone = model.tables.filter((t) => t.slotId === slotId);
   if (!gone.length) return model;
-  const goneNames = new Set(gone.map((t) => t.name));
+  const goneIds = new Set(gone.map((t) => t.id));
   return {
     tables: model.tables.filter((t) => t.slotId !== slotId),
-    relations: model.relations.filter(
-      (r) => !goneNames.has(r.fromTable) && !goneNames.has(r.toTable)
-    ),
+    relations: model.relations.filter((r) => {
+      const fromGone = r.fromTableId ? goneIds.has(r.fromTableId) : gone.some((t) => t.name === r.fromTable);
+      const toGone = r.toTableId ? goneIds.has(r.toTableId) : gone.some((t) => t.name === r.toTable);
+      return !fromGone && !toGone;
+    }),
   };
 }
 
@@ -163,6 +180,11 @@ export function addFieldTo(model: DBModel, tableId: string): DBModel {
 export function deleteFieldFrom(model: DBModel, tableId: string, fieldId: string): DBModel {
   const t = model.tables.find((x) => x.id === tableId);
   const f = t?.fields.find((x) => x.id === fieldId);
+  const onTable = (r: DBRelation, side: "from" | "to") => {
+    const id = side === "from" ? r.fromTableId : r.toTableId;
+    const name = side === "from" ? r.fromTable : r.toTable;
+    return id ? id === tableId : name === t?.name;
+  };
   return {
     tables: model.tables.map((x) =>
       x.id === tableId ? { ...x, fields: x.fields.filter((y) => y.id !== fieldId) } : x
@@ -170,8 +192,8 @@ export function deleteFieldFrom(model: DBModel, tableId: string, fieldId: string
     relations: f
       ? model.relations.filter(
           (r) =>
-            !(r.fromTable === t!.name && r.fromField === f.name) &&
-            !(r.toTable === t!.name && r.toField === f.name)
+            !(onTable(r, "from") && r.fromField === f.name) &&
+            !(onTable(r, "to") && r.toField === f.name)
         )
       : model.relations,
   };
@@ -180,19 +202,18 @@ export function deleteFieldFrom(model: DBModel, tableId: string, fieldId: string
 // ---------- relations ----------
 
 /** Champ suggéré côté source : xxx_id qui vise la cible, sinon 1er non-PK, sinon 1er. */
-export function suggestFromField(tables: DBTable[], srcName: string, dstName: string): string {
-  const src = tables.find((t) => t.name === srcName);
-  if (!src || !src.fields.length) return "";
-  const dst = dstName.toLowerCase();
+export function suggestFromField(src: DBTable | undefined, dst: DBTable | undefined): string {
+  if (!src || !src.fields.length || !dst) return "";
+  const target = dst.name.toLowerCase();
   const sing = (s: string) => (s.endsWith("s") ? s.slice(0, -1) : s);
   const hit =
     src.fields.find((f) => {
       const low = f.name.toLowerCase();
       return (
-        low === `${dst}_id` ||
-        low === `${dst}id` ||
-        low === `${sing(dst)}_id` ||
-        low === `${sing(dst)}id`
+        low === `${target}_id` ||
+        low === `${target}id` ||
+        low === `${sing(target)}_id` ||
+        low === `${sing(target)}id`
       );
     }) ??
     src.fields.find((f) => !f.pk) ??
@@ -201,8 +222,7 @@ export function suggestFromField(tables: DBTable[], srcName: string, dstName: st
 }
 
 /** Champ suggéré côté cible : la PK, sinon le 1er champ. */
-export function suggestToField(tables: DBTable[], dstName: string): string {
-  const dst = tables.find((t) => t.name === dstName);
+export function suggestToField(dst: DBTable | undefined): string {
   if (!dst || !dst.fields.length) return "";
   return (dst.fields.find((f) => f.pk) ?? dst.fields[0]).name;
 }
@@ -230,15 +250,12 @@ export function inferMcdCards(
   return { fromCard: `${min},${max}`, toCard: "1,1" };
 }
 
-/** Cartes inférées pour un couple source→cible connu (formulaire, clic-clic). */
-export function inferCardsFor(
-  tables: DBTable[],
-  fromTable: string,
+/** Cartes inférées par identité : sûres quand deux instances ont des homonymes. */
+export function inferCardsForTable(
+  table: Pick<DBTable, "fields"> | undefined,
   fromField: string
 ): McdCards {
-  const t = tables.find((x) => x.name === fromTable);
-  const f = t?.fields.find((x) => x.name === fromField);
-  return inferMcdCards(f);
+  return inferMcdCards(table?.fields.find((f) => f.name === fromField));
 }
 
 /** Réapplique les cartes inférées sur des liens existants (parsers). */
@@ -297,44 +314,44 @@ export function detectCrossRelations(
   existingRelations: DBRelation[],
   allow?: (src: DBTable, target: DBTable) => boolean
 ): DBRelation[] {
-  const incomingNames = new Set(incomingTables.map((t) => t.name));
-  const baseNames = new Set(baseTables.map((t) => t.name));
-  const allNames = [...baseTables.map((t) => t.name), ...incomingTables.map((t) => t.name)];
-  const byName = new Map(
-    [...baseTables, ...incomingTables].map((t) => [t.name, t])
-  );
-  const seen = new Set(
-    existingRelations.map((r) => `${r.fromTable}.${r.fromField}→${r.toTable}.${r.toField}`)
-  );
+  const allTables = [...baseTables, ...incomingTables];
+  const allNames = allTables.map((t) => t.name);
+  const seen = new Set(existingRelations.map(relationKey));
   const out: DBRelation[] = [];
-  const scan = (sources: DBTable[], validTargets: Set<string>) => {
+  const scan = (sources: DBTable[], validTargets: DBTable[]) => {
+    const targetNames = new Set(validTargets.map((t) => t.name));
     for (const src of sources) {
       for (const f of src.fields) {
         const cand = guessFkTarget(f.name, allNames);
-        if (!cand || cand === src.name || !validTargets.has(cand)) continue;
-        const target = byName.get(cand);
+        if (!cand || cand === src.name || !targetNames.has(cand)) continue;
+        // Homonymes possibles entre instances : on choisit la cible autorisée
+        // (même instance / hors instance), jamais celle d'un autre projet.
+        const target = validTargets.find(
+          (t) => t.name === cand && t.id !== src.id && (!allow || allow(src, t))
+        );
         if (!target) continue;
-        if (allow && !allow(src, target)) continue;
         const toField = target.fields.find((x) => x.pk)?.name ?? target.fields[0]?.name;
         if (!toField) continue;
-        const key = `${src.name}.${f.name}→${cand}.${toField}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
-        const { fromCard, toCard } = inferMcdCards(f);
-        out.push({
+        const rel: DBRelation = {
           id: uid("rel"),
           fromTable: src.name,
+          fromTableId: src.id,
           fromField: f.name,
-          toTable: cand,
+          toTable: target.name,
+          toTableId: target.id,
           toField,
-          fromCard,
-          toCard,
-        });
+          fromCard: inferMcdCards(f).fromCard,
+          toCard: inferMcdCards(f).toCard,
+        };
+        const key = relationKey(rel);
+        if (seen.has(key)) continue;
+        seen.add(key);
+        out.push(rel);
       }
     }
   };
-  scan(incomingTables, baseNames);
-  scan(baseTables, incomingNames);
+  scan(incomingTables, baseTables);
+  scan(baseTables, incomingTables);
   return out;
 }
 
@@ -343,32 +360,45 @@ export function isDuplicateRelation(
   fromTable: string,
   fromField: string,
   toTable: string,
-  toField: string
+  toField: string,
+  fromTableId?: string,
+  toTableId?: string
 ): boolean {
-  return relations.some(
-    (r) =>
-      r.fromTable === fromTable &&
-      r.fromField === fromField &&
-      r.toTable === toTable &&
-      r.toField === toField
-  );
+  return relations.some((r) => {
+    const sameFrom = fromTableId && r.fromTableId
+      ? r.fromTableId === fromTableId
+      : r.fromTable === fromTable;
+    const sameTo = toTableId && r.toTableId
+      ? r.toTableId === toTableId
+      : r.toTable === toTable;
+    return sameFrom && sameTo && r.fromField === fromField && r.toField === toField;
+  });
 }
 
-/** Ajoute le lien et marque le champ source comme FK. */
+/** Ajoute le lien (IDs d'extrémités remplis) et marque le champ source FK. */
 export function addRelationTo(model: DBModel, rel: DBRelation): DBModel {
+  const src = resolveTable(model, rel.fromTable, rel.fromTableId);
+  const dst = resolveTable(model, rel.toTable, rel.toTableId);
+  const linked: DBRelation = {
+    ...rel,
+    fromTable: src?.name ?? rel.fromTable,
+    toTable: dst?.name ?? rel.toTable,
+    fromTableId: src?.id ?? rel.fromTableId,
+    toTableId: dst?.id ?? rel.toTableId,
+  };
   return {
     ...model,
     tables: model.tables.map((t) =>
-      t.name === rel.fromTable
+      (linked.fromTableId ? t.id === linked.fromTableId : t.name === linked.fromTable)
         ? {
             ...t,
             fields: t.fields.map((f) =>
-              f.name === rel.fromField ? { ...f, fk: true } : f
+              f.name === linked.fromField ? { ...f, fk: true } : f
             ),
           }
         : t
     ),
-    relations: [...model.relations, rel],
+    relations: [...model.relations, linked],
   };
 }
 
@@ -422,40 +452,48 @@ export function mergeModel(
   base: DBModel,
   parsed: DBModel,
   slotId?: string,
-  allowCrossLink?: (src: DBTable, target: DBTable) => boolean
+  allowCrossLink?: (src: DBTable, target: DBTable) => boolean,
+  slots: ImportSlot[] = []
 ): MergeResult {
-  const existing = new Set(base.tables.map((t) => t.name));
   const rename = new Map<string, string>();
-  const incoming: DBModel = {
-    tables: parsed.tables.map((t) => ({
-      ...t,
+  const taken = [...base.tables];
+  const incomingTables: DBTable[] = [];
+  for (const pt of parsed.tables) {
+    const finalName = freeTableNameInSlot(taken, slots, slotId, pt.name);
+    const t: DBTable = {
+      ...pt,
       id: uid("t"),
+      name: finalName,
       slotId,
-      fields: t.fields.map((f) => ({ ...f, id: uid("f") })),
-    })),
-    relations: parsed.relations.map((r) => ({ ...r, id: uid("rel") })),
-  };
-  for (const t of incoming.tables) {
-    if (existing.has(t.name)) {
-      let k = 2;
-      while (existing.has(`${t.name}_${k}`)) k++;
-      rename.set(t.name, `${t.name}_${k}`);
-      t.name = `${t.name}_${k}`;
-    }
-    existing.add(t.name);
+      fields: pt.fields.map((f) => ({ ...f, id: uid("f") })),
+    };
+    rename.set(pt.name, finalName);
+    incomingTables.push(t);
+    taken.push(t);
   }
-  for (const r of incoming.relations) {
-    if (rename.has(r.fromTable)) r.fromTable = rename.get(r.fromTable)!;
-    if (rename.has(r.toTable)) r.toTable = rename.get(r.toTable)!;
-  }
+  const incomingByName = new Map(incomingTables.map((t) => [t.name, t]));
+  const incomingRelations: DBRelation[] = parsed.relations.map((r) => {
+    const fromName = rename.get(r.fromTable) ?? r.fromTable;
+    const toName = rename.get(r.toTable) ?? r.toTable;
+    const from = incomingByName.get(fromName);
+    const to = incomingByName.get(toName);
+    return {
+      ...r,
+      id: uid("rel"),
+      fromTable: fromName,
+      fromTableId: from?.id,
+      toTable: toName,
+      toTableId: to?.id,
+    };
+  });
   const maxX = base.tables.length ? Math.max(...base.tables.map((t) => t.x + CARD_W)) : 0;
   const dx = Math.max(0, maxX + 120 - 60);
-  for (const t of incoming.tables) t.x += dx;
+  for (const t of incomingTables) t.x += dx;
   // FK croisées : xxx_id du nouveau modèle → anciennes tables et inversement.
   const cross = detectCrossRelations(
-    incoming.tables,
+    incomingTables,
     base.tables,
-    [...base.relations, ...incoming.relations],
+    [...base.relations, ...incomingRelations],
     allowCrossLink
   );
   // Marque les champs sources comme FK (copies, sans muter `base`).
@@ -463,19 +501,19 @@ export function mergeModel(
     ...t,
     fields: t.fields.map((f) => ({ ...f })),
   }));
-  const allTables = [...baseCopy, ...incoming.tables];
-  const byName = new Map(allTables.map((t) => [t.name, t]));
+  const allTables = [...baseCopy, ...incomingTables];
+  const byId = new Map(allTables.map((t) => [t.id, t]));
   for (const r of cross) {
-    const src = byName.get(r.fromTable);
+    const src = r.fromTableId ? byId.get(r.fromTableId) : allTables.find((t) => t.name === r.fromTable);
     const f = src?.fields.find((x) => x.name === r.fromField);
     if (f) f.fk = true;
   }
   return {
-    model: {
+    model: normalizeRelationIds({
       tables: allTables,
-      relations: [...base.relations, ...incoming.relations, ...cross],
-    },
-    ids: incoming.tables.map((t) => t.id),
+      relations: [...base.relations, ...incomingRelations, ...cross],
+    }),
+    ids: incomingTables.map((t) => t.id),
     autoLinked: cross.length,
   };
 }
@@ -518,8 +556,10 @@ export function syncSlotTables(
   base: DBModel,
   parsed: DBModel,
   slotId: string,
-  allowCrossLink?: (src: DBTable, target: DBTable) => boolean
+  allowCrossLink?: (src: DBTable, target: DBTable) => boolean,
+  slots: ImportSlot[] = []
 ): SyncResult {
+  base = normalizeRelationIds(base);
   const existing = base.tables.filter((t) => t.slotId === slotId);
   const others = base.tables.filter((t) => t.slotId !== slotId);
   const existingByName = new Map(existing.map((t) => [t.name, t]));
@@ -529,6 +569,9 @@ export function syncSlotTables(
   const nextSlotTables: DBTable[] = [];
   const fresh: DBTable[] = [];
   const ids: string[] = [];
+  const parsedToSlot = new Map<string, DBTable>();
+  const parsedFkById = new Map<string, Map<string, boolean>>();
+  const namePool = [...others];
   let updated = 0;
   for (const pt of parsedByName.values()) {
     const ex = existingByName.get(pt.name);
@@ -539,17 +582,25 @@ export function syncSlotTables(
         if (ef) return { ...ef, type: pf.type, pk: pf.pk, unique: pf.unique, nullable: pf.nullable, fk: pf.fk || ef.fk };
         return { ...pf, id: uid("f") };
       });
-      nextSlotTables.push({ ...ex, fields, slotId });
+      const nt: DBTable = { ...ex, fields, slotId };
+      nextSlotTables.push(nt);
+      namePool.push(nt);
+      parsedToSlot.set(pt.name, nt);
+      parsedFkById.set(nt.id, new Map(pt.fields.map((f) => [f.name, !!f.fk])));
       ids.push(ex.id);
       updated++;
     } else {
       const nt: DBTable = {
         ...pt,
         id: uid("t"),
+        name: freeTableNameInSlot(namePool, slots, slotId, pt.name),
         slotId,
         fields: pt.fields.map((f) => ({ ...f, id: uid("f") })),
       };
       fresh.push(nt);
+      namePool.push(nt);
+      parsedToSlot.set(pt.name, nt);
+      parsedFkById.set(nt.id, new Map(pt.fields.map((f) => [f.name, !!f.fk])));
       ids.push(nt.id);
     }
   }
@@ -559,70 +610,144 @@ export function syncSlotTables(
   const removed = existing.filter((t) => !parsedByName.has(t.name)).length;
 
   // --- relations ---
-  const oldSlotNames = new Set(existing.map((t) => t.name));
-  const newSlotNames = new Set(nextSlotTables.map((t) => t.name));
+  const oldSlotIds = new Set(existing.map((t) => t.id));
+  const newSlotIds = new Set(nextSlotTables.map((t) => t.id));
   const resultTables = [...others, ...nextSlotTables];
-  const fieldsOf = new Map(resultTables.map((t) => [t.name, new Set(t.fields.map((f) => f.name))]));
-  const endpointOK = (r: Pick<DBRelation, "fromTable" | "fromField" | "toTable" | "toField">) =>
-    fieldsOf.has(r.fromTable) &&
-    fieldsOf.has(r.toTable) &&
-    fieldsOf.get(r.fromTable)!.has(r.fromField) &&
-    fieldsOf.get(r.toTable)!.has(r.toField);
-  const parsedKeys = new Set(
-    parsed.relations.map((r) => `${r.fromTable}.${r.fromField}→${r.toTable}.${r.toField}`)
-  );
+  const byId = new Map(resultTables.map((t) => [t.id, t]));
+  const endpointOf = (r: DBRelation, side: "from" | "to"): DBTable | undefined => {
+    const id = side === "from" ? r.fromTableId : r.toTableId;
+    const name = side === "from" ? r.fromTable : r.toTable;
+    if (id && byId.has(id)) return byId.get(id);
+    return resultTables.find((t) => t.name === name);
+  };
+  const endpointOK = (r: DBRelation) => {
+    const from = endpointOf(r, "from");
+    const to = endpointOf(r, "to");
+    return !!from && !!to &&
+      from.fields.some((f) => f.name === r.fromField) &&
+      to.fields.some((f) => f.name === r.toField);
+  };
+  const parsedRelations: DBRelation[] = [];
+  for (const pr of parsed.relations) {
+    const from = parsedToSlot.get(pr.fromTable);
+    const to = parsedToSlot.get(pr.toTable);
+    if (!from || !to) continue;
+    parsedRelations.push({
+      ...pr,
+      id: uid("rel"),
+      fromTable: from.name,
+      fromTableId: from.id,
+      toTable: to.name,
+      toTableId: to.id,
+    });
+  }
+  const parsedKeys = new Set(parsedRelations.map(relationKey));
+  const touchesOldSlot = (r: DBRelation) => {
+    const from = endpointOf(r, "from");
+    const to = endpointOf(r, "to");
+    return (from && oldSlotIds.has(from.id)) || (to && oldSlotIds.has(to.id));
+  };
+  const internalToSlot = (r: DBRelation) => {
+    const from = endpointOf(r, "from");
+    const to = endpointOf(r, "to");
+    return !!from && !!to && newSlotIds.has(from.id) && newSlotIds.has(to.id);
+  };
   const kept: DBRelation[] = [];
   for (const r of base.relations) {
-    const touchesSlot = oldSlotNames.has(r.fromTable) || oldSlotNames.has(r.toTable);
-    if (!touchesSlot) {
-      if (endpointOK(r)) kept.push(r);
+    if (!endpointOK(r)) continue;
+    if (!touchesOldSlot(r)) {
+      kept.push(r);
       continue;
     }
-    if (!endpointOK(r)) continue;
-    const internal = newSlotNames.has(r.fromTable) && newSlotNames.has(r.toTable);
     // Interne au slot : on ne garde que ce que le source contient encore
     // (le manuel cross-slot vers l'extérieur est conservé s'il reste valide).
-    if (internal && !parsedKeys.has(`${r.fromTable}.${r.fromField}→${r.toTable}.${r.toField}`)) continue;
+    if (internalToSlot(r) && !parsedKeys.has(relationKey(r))) continue;
     kept.push(r);
   }
-  const keptKeys = new Set(kept.map((r) => `${r.fromTable}.${r.fromField}→${r.toTable}.${r.toField}`));
+  const keptKeys = new Set(kept.map(relationKey));
   const addedParsed: DBRelation[] = [];
-  for (const pr of parsed.relations) {
-    const key = `${pr.fromTable}.${pr.fromField}→${pr.toTable}.${pr.toField}`;
+  for (const pr of parsedRelations) {
+    const key = relationKey(pr);
     if (keptKeys.has(key) || !endpointOK(pr)) continue;
-    // Cartes déjà inférées par les parsers ; régénère l'id.
-    addedParsed.push({ ...pr, id: uid("rel") });
+    addedParsed.push(pr);
     keptKeys.add(key);
   }
   const cross = detectCrossRelations(nextSlotTables, others, [...kept, ...addedParsed], allowCrossLink);
   const relations = [...kept, ...addedParsed, ...cross];
 
   // --- cohérence FK : source d'un lien → fk, sinon drapeau du source ---
-  const parsedFkByTable = new Map(
-    [...parsedByName.values()].map((t) => [t.name, new Map(t.fields.map((f) => [f.name, !!f.fk]))])
+  const sources = new Set(
+    relations.map((r) => `${r.fromTableId ?? r.fromTable}.${r.fromField}`)
   );
-  const sources = new Set(relations.map((r) => `${r.fromTable}.${r.fromField}`));
   const tables = resultTables.map((t) => {
     if (t.slotId !== slotId) {
       return {
         ...t,
-        fields: t.fields.map((f) => (sources.has(`${t.name}.${f.name}`) ? { ...f, fk: true } : f)),
+        fields: t.fields.map((f) => (sources.has(`${t.id}.${f.name}`) ? { ...f, fk: true } : f)),
       };
     }
-    const pfk = parsedFkByTable.get(t.name);
+    const pfk = parsedFkById.get(t.id);
     return {
       ...t,
       fields: t.fields.map((f) => ({
         ...f,
-        fk: sources.has(`${t.name}.${f.name}`) ? true : (pfk?.get(f.name) ?? f.fk),
+        fk: sources.has(`${t.id}.${f.name}`) ? true : (pfk?.get(f.name) ?? f.fk),
       })),
     };
   });
 
   return {
-    model: { tables, relations },
+    model: normalizeRelationIds({ tables, relations }),
     ids,
-    stats: { added, updated, removed, autoLinked: cross.length + addedParsed.filter((r) => !newSlotNames.has(r.toTable) || !newSlotNames.has(r.fromTable)).length },
+    stats: {
+      added,
+      updated,
+      removed,
+      autoLinked: cross.length + addedParsed.filter((r) => !internalToSlot(r)).length,
+    },
+  };
+}
+
+/**
+ * Après un rangement de slot dans une instance, les homonymes qui peuvent
+ * désormais communiquer (même instance, ou table hors instance) doivent
+ * redevenir uniques. Les homonymes d'une AUTRE instance restent intacts :
+ * aucun suffixe artificiel entre projets étanches.
+ */
+export function reconcileSlotTableNames(
+  model: DBModel,
+  slots: ImportSlot[],
+  slotId: string
+): { model: DBModel; renamed: number } {
+  const mine = model.tables.filter((t) => t.slotId === slotId);
+  if (!mine.length) return { model, renamed: 0 };
+  const instanceId = instanceIdOfTable(slots, mine[0]);
+  const canShare = (t: DBTable) =>
+    namesCanShareAcrossInstances(instanceId, instanceIdOfTable(slots, t));
+  const taken: DBTable[] = model.tables.filter((t) => t.slotId !== slotId);
+  const rename = new Map<string, string>();
+  for (const t of mine) {
+    const name = freeScopedTableName(taken, t.name, canShare);
+    if (name !== t.name) rename.set(t.id, name);
+    taken.push({ ...t, name });
+  }
+  if (!rename.size) return { model, renamed: 0 };
+  return {
+    model: {
+      tables: model.tables.map((t) =>
+        rename.has(t.id) ? { ...t, name: rename.get(t.id)! } : t
+      ),
+      relations: model.relations.map((r) => ({
+        ...r,
+        fromTable: r.fromTableId && rename.has(r.fromTableId)
+          ? rename.get(r.fromTableId)!
+          : r.fromTable,
+        toTable: r.toTableId && rename.has(r.toTableId)
+          ? rename.get(r.toTableId)!
+          : r.toTable,
+      })),
+    },
+    renamed: rename.size,
   };
 }
 
@@ -651,14 +776,12 @@ export function visibleTablesOf(model: DBModel, hiddenSlotIds: Set<string>): DBT
   return model.tables.filter((t) => !t.slotId || !hiddenSlotIds.has(t.slotId));
 }
 
-/** Liens visibles : résolus par ID pour survivre aux doublons de noms hérités. */
+/** Liens visibles : extrémités résolues par ID (noms homonymes possibles). */
 export function visibleRelationsOf(model: DBModel, visibleTables: DBTable[]): DBRelation[] {
-  const byName = new Map(model.tables.map((t) => [t.name, t]));
   const visibleIds = new Set(visibleTables.map((t) => t.id));
   return model.relations.filter((r) => {
-    const a = byName.get(r.fromTable);
-    const b = byName.get(r.toTable);
-    return !!a && !!b && visibleIds.has(a.id) && visibleIds.has(b.id);
+    const { from, to } = relationEnds(model, r);
+    return !!from && !!to && visibleIds.has(from.id) && visibleIds.has(to.id);
   });
 }
 
@@ -671,37 +794,52 @@ export function slotTableCounts(model: DBModel): Map<string, number> {
 
 // ---------- validation ----------
 
-export function validateModel(model: DBModel): ModelIssue[] {
+export interface ValidateOptions {
+  /** Deux tables homonymes de deux instances étanches sont légitimes. */
+  allowDuplicateNames?: (a: DBTable, b: DBTable) => boolean;
+}
+
+export function validateModel(model: DBModel, opts?: ValidateOptions): ModelIssue[] {
   const out: ModelIssue[] = [];
-  const names = new Set(model.tables.map((t) => t.name));
-  const seen = new Set<string>();
-  const byName = new Map(model.tables.map((t) => [t.name, t]));
+  const groups = new Map<string, DBTable[]>();
   for (const t of model.tables) {
-    if (seen.has(t.name))
+    const list = groups.get(t.name);
+    if (list) list.push(t);
+    else groups.set(t.name, [t]);
+  }
+  for (const [name, group] of groups) {
+    if (group.length < 2) continue;
+    let conflict = false;
+    for (let i = 0; i < group.length && !conflict; i++) {
+      for (let j = i + 1; j < group.length && !conflict; j++) {
+        if (!opts?.allowDuplicateNames?.(group[i], group[j])) conflict = true;
+      }
+    }
+    if (conflict)
       out.push({
         level: "err",
-        text: `Nom en double : « ${t.name} » — renomme une des deux tables (les liens s'y perdent).`,
+        text: `Nom en double : « ${name} » — renomme une des deux tables (les liens s'y perdent).`,
       });
-    else seen.add(t.name);
+  }
+  for (const t of model.tables) {
     if (!t.fields.some((f) => f.pk)) out.push({ level: "warn", text: `${t.name} : sans PRIMARY KEY` });
-    const linked = model.relations.some((r) => r.fromTable === t.name || r.toTable === t.name);
+    const linked = model.relations.some((r) => relationTouchesTable(r, t));
     if (!linked && model.tables.length > 1)
       out.push({ level: "warn", text: `${t.name} : table isolée (aucun lien)` });
   }
   for (const r of model.relations) {
-    if (!names.has(r.fromTable) || !names.has(r.toTable))
+    const { from, to } = relationEnds(model, r);
+    if (!from || !to) {
       out.push({
         level: "err",
         text: `Lien orphelin : ${r.fromTable}.${r.fromField} → ${r.toTable}.${r.toField}`,
       });
-    else {
-      const a = byName.get(r.fromTable);
-      const b = byName.get(r.toTable);
-      if (a && !a.fields.some((f) => f.name === r.fromField))
-        out.push({ level: "err", text: `${r.fromTable}.${r.fromField} n'existe plus` });
-      if (b && !b.fields.some((f) => f.name === r.toField))
-        out.push({ level: "err", text: `${r.toTable}.${r.toField} n'existe plus` });
+      continue;
     }
+    if (!from.fields.some((f) => f.name === r.fromField))
+      out.push({ level: "err", text: `${r.fromTable}.${r.fromField} n'existe plus` });
+    if (!to.fields.some((f) => f.name === r.toField))
+      out.push({ level: "err", text: `${r.toTable}.${r.toField} n'existe plus` });
   }
   return out;
 }

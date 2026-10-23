@@ -13,13 +13,14 @@ import {
   createTable,
   deleteFieldFrom,
   duplicateTable as duplicateTableOf,
-  inferCardsFor,
+  inferCardsForTable,
   insertTable,
   isDuplicateRelation,
   mergeModel,
   moveTableIn,
   moveTablesBy,
   removeRelation,
+  reconcileSlotTableNames,
   removeSlotTables,
   removeTable,
   renameTableIn,
@@ -50,6 +51,18 @@ import {
   toggleInstanceHidden,
 } from "./domain/instances";
 import { layoutInstanceOnly, smartLayoutModel } from "./domain/layout";
+import {
+  instanceIdOfTable,
+  namesCanShareAcrossInstances,
+  qualifyModelForExport,
+  tableScopeLabel,
+} from "./domain/naming";
+import { normalizeRelationIds, relationEnds } from "./domain/relations";
+import {
+  normalizeQuery,
+  searchModels,
+  tableMatchesQueryInScope,
+} from "./domain/search";
 import { getExporter, safeFileName } from "./domain/exporters";
 import { downloadBlob, makeZipBlob } from "./domain/zip";
 import {
@@ -87,6 +100,7 @@ import { GalleryModal } from "./components/GalleryModal";
 import { LeftPanel } from "./components/LeftPanel";
 import { RightPanel } from "./components/RightPanel";
 import { CanvasView } from "./components/CanvasView";
+import type { RelFormState } from "./components/RelationForm";
 import { exportSVGString as buildExportSVG } from "./domain/exportSvg";
 
 // Workspace = tout ce que le Ctrl+Z doit restaurer d'un coup : le canvas
@@ -150,7 +164,11 @@ export default function App() {
     canRedo,
   } = useHistory<Workspace>(() => {
     if (sharedSnap) {
-      return { model: sharedSnap.model, slots: sharedSnap.slots, instances: sharedSnap.instances };
+      return {
+        model: normalizeRelationIds(sharedSnap.model),
+        slots: sharedSnap.slots,
+        instances: sharedSnap.instances,
+      };
     }
     const ss = loadSlots();
     const ii = loadInstances();
@@ -204,7 +222,9 @@ export default function App() {
     () => model.tables.find((t) => t.id === selectedId) ?? null,
     [model, selectedId]
   );
-  const byName = useMemo(() => new Map(model.tables.map((t) => [t.name, t])), [model]);
+  const byId = useMemo(() => new Map(model.tables.map((t) => [t.id, t])), [model]);
+  const slotById = useMemo(() => new Map(slots.map((s) => [s.id, s])), [slots]);
+  const instanceById = useMemo(() => new Map(instances.map((i) => [i.id, i])), [instances]);
   // Visibilité par modèle ET par instance : voir `domain/instances.ts`.
   // Masquer une instance masque tous ses modèles ; "Isoler" = une seule visible.
   const hiddenSlotIds = useMemo(() => effectiveHiddenSlotIds(slots, instances), [slots, instances]);
@@ -339,8 +359,14 @@ export default function App() {
     setParseMsg(`Instance « ${name} » supprimée : ses modèles sont conservés dans « Sans instance ». (Ctrl+Z pour annuler)`);
   }, [applyWorkspace, instances]);
   const assignSlot = useCallback((slotId: string, instanceId?: string) => {
-    setSlots((ss) => assignSlotToInstance(ss, slotId, instanceId));
-  }, [setSlots]);
+    const nextSlots = assignSlotToInstance(slots, slotId, instanceId);
+    const { model: nextModel, renamed } = reconcileSlotTableNames(model, nextSlots, slotId);
+    applyWorkspace({ ...workspace, slots: nextSlots, model: nextModel });
+    if (renamed) {
+      const target = instanceId ? instances.find((i) => i.id === instanceId)?.name ?? "l'instance" : "Sans instance";
+      setParseMsg(`Rangement dans « ${target} » : ${renamed} homonyme(s) renommé(s) pour rester unique dans le même périmètre. Les homonymes des autres instances restent intacts.`);
+    }
+  }, [slots, model, workspace, applyWorkspace, instances]);
   /** Tout ré-afficher : instances + modèles (sortie du mode "un projet à la fois"). */
   const showAll = useCallback(() => {
     setInstances((ii) => ii.map((i) => ({ ...i, hidden: false })));
@@ -397,7 +423,13 @@ export default function App() {
   // Règles internes au modèle + règle de projet : un lien qui traverse deux
   // instances (héritage d'un rangement a posteriori) est signalé, jamais créé.
   const issues = useMemo(() => {
-    const base = validateModel(model);
+    const base = validateModel(model, {
+      allowDuplicateNames: (a, b) =>
+        namesCanShareAcrossInstances(
+          instanceIdOfTable(slots, a),
+          instanceIdOfTable(slots, b)
+        ),
+    });
     return [
       ...base,
       ...crossInstanceRelations(model, slots, instances).map(({ relation, fromInstance, toInstance }) => ({
@@ -443,12 +475,41 @@ export default function App() {
     camera.centerOn(t);
     setSelectedId(t.id);
   };
+  // Résultat « modèle » : ré-affiche le modèle (et son instance si besoin) puis
+  // cadre ses tables. Aucun changement structurel : uniquement de la visibilité.
+  const focusModel = useCallback((slotId: string) => {
+    const slot = slots.find((s) => s.id === slotId);
+    if (!slot) return;
+    const instance = slot.instanceId ? instances.find((i) => i.id === slot.instanceId) : undefined;
+    if (instance?.hidden) {
+      setInstances((ii) => ii.map((i) => (i.id === instance.id ? { ...i, hidden: false } : i)));
+    }
+    if (slot.hidden) {
+      setSlots((ss) => ss.map((s) => (s.id === slotId ? { ...s, hidden: false } : s)));
+    }
+    const tables = model.tables.filter((t) => t.slotId === slotId);
+    if (!tables.length) {
+      setShowLeft(true);
+      setParseMsg(`Modèle « ${slot.name} » : aucune table sur le canvas. Ajoute-le depuis le panneau gauche.`);
+      return;
+    }
+    camera.focusOn(tables);
+    setSelectedId(null);
+    setParseMsg(`Modèle « ${slot.name} » cadré${instance ? ` (instance « ${instance.name} »)` : ""}.`);
+  }, [slots, instances, model, setInstances, setSlots, camera]);
 
-  const q = query.trim().toLowerCase();
+  const q = normalizeQuery(query);
+  // Une table est « trouvée » par son nom/champ/type, mais aussi quand le nom
+  // de son modèle ou de son instance correspond : chercher un modèle éclaire
+  // toutes ses tables sans changer le filtre historique.
   const matchTable = useCallback((t: DBTable) => {
     if (!q) return true;
-    return t.name.toLowerCase().includes(q) || t.fields.some((f) => f.name.toLowerCase().includes(q) || f.type.toLowerCase().includes(q));
-  }, [q]);
+    return tableMatchesQueryInScope(t, q, slotById, instanceById);
+  }, [q, slotById, instanceById]);
+  const modelHits = useMemo(
+    () => searchModels(model, slots, instances, q),
+    [model, slots, instances, q]
+  );
 
   // ---------- import ----------
   // Ajout générique : parse un schema et l'ajoute à droite du canvas.
@@ -466,7 +527,7 @@ export default function App() {
     }
     const alreadyOnCanvas = model.tables.filter((t) => t.slotId === slot.id).length;
     if (alreadyOnCanvas > 0) {
-      const { model: synced, ids, stats } = syncSlotTables(model, m, slot.id, allowCrossLink);
+      const { model: synced, ids, stats } = syncSlotTables(model, m, slot.id, allowCrossLink, slots);
       applyWorkspace((w) => ({ ...w, model: synced }));
       setSelectedId(ids[0] ?? null);
       const bits: string[] = [];
@@ -479,13 +540,13 @@ export default function App() {
       camera.fitViewSoon();
       return;
     }
-    const { model: merged, ids, autoLinked } = mergeModel(model, m, slot.id, allowCrossLink);
+    const { model: merged, ids, autoLinked } = mergeModel(model, m, slot.id, allowCrossLink, slots);
     applyWorkspace((w) => ({ ...w, model: merged }));
     setSelectedId(ids[0] ?? null);
     updateSlot(slot.id, { msg: `+ ${m.tables.length} table(s) ajoutée(s) [${k}]${autoLinked ? ` · ⇄ ${autoLinked} lien(s) auto.` : "."}` });
     setParseMsg(`« ${slot.name} » ajouté${autoLinked ? ` : ${autoLinked} lien(s) FK détecté(s) vers les tables présentes` : " : relie ses entités à la main avec leurs cardinalités MCD"}.`);
     camera.fitViewSoon();
-  }, [applyWorkspace, model, updateSlot, camera, allowCrossLink]);
+  }, [applyWorkspace, model, updateSlot, camera, allowCrossLink, slots]);
 
   // ---------- tables ----------
   const addTable = useCallback(() => {
@@ -511,13 +572,20 @@ export default function App() {
       setParseMsg("Nom de table vide : renommage ignoré.");
       return;
     }
-    const clash = model.tables.some((t) => t.id !== id && t.name === clean);
+    const current = model.tables.find((t) => t.id === id);
+    const instanceId = current ? instanceIdOfTable(slots, current) : undefined;
+    const clash = model.tables.find(
+      (t) =>
+        t.id !== id &&
+        t.name === clean &&
+        !namesCanShareAcrossInstances(instanceId, instanceIdOfTable(slots, t))
+    );
     if (clash) {
-      setParseMsg(`Nom déjà pris : « ${clean} » existe déjà. Les noms de tables doivent être uniques (sinon les liens se trompent de table).`);
+      setParseMsg(`Nom déjà pris dans le même périmètre : « ${clean} » existe déjà. Deux instances distinctes peuvent partager un nom ; deux tables qui peuvent se relier, non.`);
       return;
     }
     apply((m) => renameTableIn(m, id, clean));
-  }, [apply, model]);
+  }, [apply, model, slots]);
 
   const moveTable = useCallback((id: string, x: number, y: number) => {
     setModel((m) => moveTableIn(m, id, x, y));
@@ -541,7 +609,8 @@ export default function App() {
   }, [apply]);
 
   // ---------- relations (entité → entité, cardinalités MCD des 2 côtés) ----------
-  const [relForm, setRelForm] = useState({ fromTable: "", fromField: "", toTable: "", toField: "", cardA: "1,N", cardB: "1,1" });
+  // Le formulaire manipule des IDs : deux instances peuvent avoir « users ».
+  const [relForm, setRelForm] = useState<RelFormState>({ fromTableId: "", fromField: "", toTableId: "", toField: "", cardA: "1,N", cardB: "1,1" });
   // Mode liaison sur le canvas : clic sur l'entité source puis sur l'entité cible.
   const [linkMode, setLinkMode] = useState(false);
   const [linkFromId, setLinkFromId] = useState<string | null>(null);
@@ -550,34 +619,38 @@ export default function App() {
   linkModeRef.current = linkMode;
   // Champ suggéré côté source : xxx_id qui vise la cible, sinon 1er champ non-PK, sinon 1er champ.
   const suggestFromField = useCallback(
-    (srcName: string, dstName: string): string => suggestFromFieldOf(model.tables, srcName, dstName),
-    [model]
+    (srcId: string, dstId: string): string =>
+      suggestFromFieldOf(byId.get(srcId), byId.get(dstId)),
+    [byId]
   );
   const suggestToField = useCallback(
-    (dstName: string): string => suggestToFieldOf(model.tables, dstName),
-    [model]
+    (dstId: string): string => suggestToFieldOf(byId.get(dstId)),
+    [byId]
   );
 
   const addRelation = useCallback(() => {
-    const { fromTable, fromField, toTable, toField, cardA, cardB } = relForm;
-    if (!fromTable || !fromField || !toTable || !toField) return;
-    const src = model.tables.find((t) => t.name === fromTable);
-    const dst = model.tables.find((t) => t.name === toTable);
-    const blocked = src && dst ? communicationError(src, dst) : null;
+    const { fromTableId, fromField, toTableId, toField, cardA, cardB } = relForm;
+    const src = byId.get(fromTableId);
+    const dst = byId.get(toTableId);
+    if (!src || !dst || !fromField || !toField) return;
+    const blocked = communicationError(src, dst);
     if (blocked) {
       setParseMsg(blocked);
       return;
     }
-    if (isDuplicateRelation(model.relations, fromTable, fromField, toTable, toField)) {
-      setParseMsg(`Lien déjà existant : ${fromTable}.${fromField} → ${toTable}.${toField}.`);
+    if (isDuplicateRelation(model.relations, src.name, fromField, dst.name, toField, src.id, dst.id)) {
+      setParseMsg(`Lien déjà existant : ${src.name}.${fromField} → ${dst.name}.${toField}.`);
       return;
     }
     const rel: DBRelation = {
-      id: uid("rel"), fromTable, fromField, toTable, toField, fromCard: cardA, toCard: cardB,
+      id: uid("rel"),
+      fromTable: src.name, fromTableId: src.id, fromField,
+      toTable: dst.name, toTableId: dst.id, toField,
+      fromCard: cardA, toCard: cardB,
     };
     apply((m) => addRelationTo(m, rel));
     setRelForm((f) => ({ ...f, fromField: "", toField: "" }));
-  }, [relForm, apply, model, communicationError]);
+  }, [relForm, apply, model, byId, communicationError]);
 
   const deleteRelation = useCallback((id: string) => {
     apply((m) => removeRelation(m, id));
@@ -606,21 +679,23 @@ export default function App() {
       setLinkFromId(null);
       return;
     }
-    const fromField = suggestFromField(src.name, t.name);
-    const toField = suggestToField(t.name);
+    const fromField = suggestFromFieldOf(src, t);
+    const toField = suggestToFieldOf(t);
     if (!fromField || !toField) {
       setParseMsg("Liaison impossible : champ source ou cible introuvable.");
       setLinkFromId(null);
       return;
     }
-    const { fromCard, toCard } = inferCardsFor(model.tables, src.name, fromField);
+    const { fromCard, toCard } = inferCardsForTable(src, fromField);
     const rel: DBRelation = {
       id: uid("rel"),
-      fromTable: src.name, fromField, toTable: t.name, toField,
+      fromTable: src.name, fromTableId: src.id, fromField,
+      toTable: t.name, toTableId: t.id, toField,
       fromCard, toCard,
     };
     const dup = isDuplicateRelation(
-      model.relations, rel.fromTable, rel.fromField, rel.toTable, rel.toField
+      model.relations, rel.fromTable, rel.fromField, rel.toTable, rel.toField,
+      rel.fromTableId, rel.toTableId
     );
     if (dup) {
       setParseMsg(`Lien déjà existant : ${rel.fromTable}.${rel.fromField} → ${rel.toTable}.${rel.toField}. Choisis d'autres champs ou modifie-le dans Édition.`);
@@ -631,7 +706,7 @@ export default function App() {
     setParseMsg(`Lié : ${src.name}.${fromField} (${rel.fromCard}) — ${t.name}.${toField} (${rel.toCard}). Modifie les cardinalités dans Édition.`);
     setSelectedId(src.id);
     setLinkFromId(null); // le mode reste actif pour enchaîner
-  }, [linkFromId, model, apply, suggestFromField, suggestToField, communicationError]);
+  }, [linkFromId, model, apply, communicationError]);
 
   // ---------- galerie : un modèle choisi S'AJOUTE aux autres (jamais de remplacement) ----------
   // Il rejoint le canvas (à droite) + un slot du panneau gauche, en UN seul
@@ -640,7 +715,7 @@ export default function App() {
     const parsed = parseAuto(pack.sql).model;
     const name = `${pack.numero} · ${pack.titre}`;
     const slotId = uid("slot");
-    const { model: merged, ids, autoLinked } = mergeModel(model, parsed, slotId);
+    const { model: merged, ids, autoLinked } = mergeModel(model, parsed, slotId, undefined, slots);
     const slot: ImportSlot = {
       id: slotId, name, source: pack.sql, collapsed: true,
       msg: `Ajouté : ${parsed.tables.length} table(s) sur le canvas${autoLinked ? ` · ⇄ ${autoLinked} lien(s) auto` : ""}.`,
@@ -697,11 +772,10 @@ export default function App() {
     const liveEdges: LiveEdge[] = [];
     if (worldRef.current) {
       for (const r of model.relations) {
-        const moveFrom = r.fromTable === t.name;
-        const moveTo = r.toTable === t.name;
+        const { from: a, to: b } = relationEnds(model, r);
+        const moveFrom = r.fromTableId ? r.fromTableId === t.id : r.fromTable === t.name;
+        const moveTo = r.toTableId ? r.toTableId === t.id : r.toTable === t.name;
         if (!moveFrom && !moveTo) continue;
-        const a = byName.get(r.fromTable);
-        const b = byName.get(r.toTable);
         if (!a || !b) continue;
         const g = worldRef.current.querySelector(`g.edge[data-rel="${r.id}"]`);
         if (!g) continue;
@@ -804,12 +878,15 @@ export default function App() {
       }
     }
     for (const r of model.relations) {
-      const moveFrom = movingNames.has(r.fromTable);
-      const moveTo = movingNames.has(r.toTable);
-      if (!moveFrom && !moveTo) continue;
-      const a = byName.get(r.fromTable);
-      const b = byName.get(r.toTable);
+      const { from: a, to: b } = relationEnds(model, r);
       if (!a || !b) continue;
+      const moveFrom = r.fromTableId
+        ? movingIds.has(r.fromTableId)
+        : movingNames.has(r.fromTable);
+      const moveTo = r.toTableId
+        ? movingIds.has(r.toTableId)
+        : movingNames.has(r.toTable);
+      if (!moveFrom && !moveTo) continue;
       const g = world.querySelector(`g.edge[data-rel="${r.id}"]`);
       if (!g) continue;
       const texts = g.querySelectorAll("text");
@@ -883,13 +960,23 @@ export default function App() {
   }, [exportScope, model, slots, visibleTables, visibleRelations]);
 
   const exporter = getExporter(exportFormat) ?? getExporter("sql")!;
+  // Les homonymes de deux instances visibles sont qualifiés par les initiales
+  // du projet UNIQUEMENT pour l'export (SQL/Prisma/Drizzle/SVG). Le JSON reste
+  // une sauvegarde fidèle, sans renommage.
+  const exportModel = useMemo(
+    () =>
+      exportFormat === "json"
+        ? scopeModel
+        : qualifyModelForExport(scopeModel, slots, instances),
+    [exportFormat, scopeModel, slots, instances]
+  );
   const exportText = useMemo(() => {
     try {
-      return exporter.generate(scopeModel);
+      return exporter.generate(exportModel);
     } catch {
       return "";
     }
-  }, [exporter, scopeModel]);
+  }, [exporter, exportModel]);
 
   const scopeName = useMemo(() => {
     if (exportScope.kind === "slot") return slots.find((s) => s.id === exportScope.slotId)?.name ?? "modèle";
@@ -934,8 +1021,8 @@ export default function App() {
   };
 
   const exportSVGString = useCallback(
-    () => buildExportSVG(scopeModel.tables, scopeModel.relations, { title: `MCD — ${scopeName}`, theme: imageTheme, edgeStyle }),
-    [scopeModel, scopeName, imageTheme, edgeStyle]
+    () => buildExportSVG(exportModel.tables, exportModel.relations, { title: `MCD — ${scopeName}`, theme: imageTheme, edgeStyle }),
+    [exportModel, scopeName, imageTheme, edgeStyle]
   );
 
   const exportPNG = useCallback(() => {
@@ -1034,25 +1121,13 @@ export default function App() {
       try {
         const data = JSON.parse(String(rd.result)) as DBModel;
         if (!data.tables) throw new Error("bad");
-        // Déduplique les noms (l'import JSON brut est le dernier trou possible) :
-        // on garde le nom sur la DERNIÈRE occurrence (= résolution actuelle des
-        // liens) et on renomme les précédentes, sans toucher aux relations.
-        const seen = new Set<string>();
-        let fixed = 0;
+        // Le JSON est une sauvegarde fidèle : on conserve les homonymes
+        // inter-instances. Les relations sont résolues par IDs (les sauvegardes
+        // anciennes, sans IDs, retombent sur les noms, qui étaient uniques).
         const tables = data.tables.map((t) => ({ ...t }));
-        for (let i = tables.length - 1; i >= 0; i--) {
-          const t = tables[i];
-          if (seen.has(t.name)) {
-            let k = 2;
-            while (seen.has(`${t.name}_${k}`)) k++;
-            t.name = `${t.name}_${k}`;
-            seen.add(t.name);
-            fixed++;
-          } else seen.add(t.name);
-        }
-        apply({ tables, relations: data.relations ?? [] });
+        apply(normalizeRelationIds({ tables, relations: data.relations ?? [] }));
         setSelectedId(tables[0]?.id ?? null);
-        setParseMsg(fixed ? `JSON chargé : ${fixed} doublon(s) renommé(s).` : "JSON chargé.");
+        setParseMsg("JSON chargé.");
       } catch { alert("Fichier JSON invalide."); }
     };
     rd.readAsText(f);
@@ -1089,6 +1164,20 @@ export default function App() {
     }
     return m;
   }, [slots, instances]);
+
+  const duplicateNames = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const t of model.tables) counts.set(t.name, (counts.get(t.name) ?? 0) + 1);
+    return new Set([...counts].filter(([, n]) => n > 1).map(([name]) => name));
+  }, [model]);
+  // Dans les formulaires, un homonyme est qualifié par son instance/modèle.
+  const tableLabel = useCallback(
+    (t: DBTable) =>
+      duplicateNames.has(t.name)
+        ? `${t.name} · ${tableScopeLabel(t, slots, instances)}`
+        : t.name,
+    [duplicateNames, slots, instances]
+  );
 
   return (
     <div className={`app ${focusMode ? "focus" : ""}`}>
@@ -1190,6 +1279,9 @@ export default function App() {
           linkHoverId={linkHoverId}
           query={query}
           hasQuery={!!q}
+          modelHits={modelHits}
+          onFocusModel={focusModel}
+          tableLabel={tableLabel}
           onWrapNode={camera.attachWrap}
           onWorldNode={attachWorldNode}
           onCanvasNode={camera.attachCanvas}
@@ -1227,6 +1319,7 @@ export default function App() {
             selected={selected}
             relForm={relForm}
             onRelForm={setRelForm}
+            tableLabel={tableLabel}
             onRenameTable={renameTable}
             onAddTable={addTable}
             onAddField={addField}
@@ -1255,7 +1348,7 @@ export default function App() {
       {!focusMode && (
         <StatusBar
           msg={parseMsg}
-          selectedName={selected?.name ?? null}
+          selectedName={selected ? tableLabel(selected) : null}
           selectedFields={selected?.fields.length ?? 0}
           zoomPct={Math.round(camera.cam.z * 100)}
           savedAt={savedAt}

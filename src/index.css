@@ -77,6 +77,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .btn.full { width: 100%; }
 .btn.active { background: var(--ink); color: #fff; }
 .btn:disabled { opacity: .35; cursor: default; }
+.btn.masked { opacity: .55; border-style: dashed; }
 .icon-btn { border: none; background: transparent; cursor: pointer; color: var(--muted); font-family: var(--mono); font-size: 12px; padding: 2px 6px; }
 .icon-btn:hover { color: var(--red); }
 

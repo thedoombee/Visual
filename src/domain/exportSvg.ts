@@ -46,11 +46,14 @@ export function exportSVGString(
   s += `<rect x="${maxX - 120}" y="22" width="80" height="40" fill="${th.accent}"/><text x="${maxX - 80}" y="48" fill="#fff" font-size="20" font-weight="700" text-anchor="middle">+</text></g>`;
 
   const oy = titleH;
+  const vById = new Map(tables.map((t) => [t.id, t]));
   const vByName = new Map(tables.map((t) => [t.name, t]));
+  const endOf = (id: string | undefined, name: string) =>
+    (id ? vById.get(id) : undefined) ?? vByName.get(name);
   // Liens : halo + trait + pastilles (dimensions selon le thème).
   for (const r of relations) {
-    const a = vByName.get(r.fromTable);
-    const b = vByName.get(r.toTable);
+    const a = endOf(r.fromTableId, r.fromTable);
+    const b = endOf(r.toTableId, r.toTable);
     if (!a || !b) continue;
     const x1 = a.x + CARD_W;
     const y1 = oy + fieldY(a, r.fromField);
