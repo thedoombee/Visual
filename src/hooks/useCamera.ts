@@ -90,21 +90,22 @@ export function useCamera(tables: DBTable[], initialCam?: Camera) {
   };
   const resetCam = () => setCam(HOME);
 
-  const fitView = () => {
-    if (!tables.length) {
+  const focusOn = (ts: DBTable[]) => {
+    if (!ts.length) {
       setCam(HOME);
       return;
     }
     const el = wrapRef.current;
     const W = el?.clientWidth || 1000;
     const H = el?.clientHeight || 700;
-    const minX = Math.min(...tables.map((t) => t.x));
-    const minY = Math.min(...tables.map((t) => t.y));
-    const maxX = Math.max(...tables.map((t) => t.x + CARD_W));
-    const maxY = Math.max(...tables.map((t) => t.y + cardH(t)));
+    const minX = Math.min(...ts.map((t) => t.x));
+    const minY = Math.min(...ts.map((t) => t.y));
+    const maxX = Math.max(...ts.map((t) => t.x + CARD_W));
+    const maxY = Math.max(...ts.map((t) => t.y + cardH(t)));
     const z = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, Math.min((W - 80) / Math.max(1, maxX - minX), (H - 80) / Math.max(1, maxY - minY))));
     setCam({ x: 40 - minX * z, y: 40 - minY * z, z: +z.toFixed(2) });
   };
+  const fitView = () => focusOn(tables);
   const fitViewSoon = () => setTimeout(() => fitView(), 60);
 
   const centerOn = (t: DBTable) => {
@@ -152,6 +153,7 @@ export function useCamera(tables: DBTable[], initialCam?: Camera) {
     fitView,
     fitViewSoon,
     centerOn,
+    focusOn,
     onCanvasMouseDown,
   };
 }

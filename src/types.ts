@@ -21,10 +21,15 @@ export interface DBTable {
 
 export interface DBRelation {
   id: string;
-  fromTable: string; // table name
+  fromTable: string; // table name (libellé lisible / export)
   fromField: string;
   toTable: string;
   toField: string;
+  // Identité stable des extrémités. Deux instances étanches peuvent avoir des
+  // tables homonymes : les liens se résolvent d'abord par ID, puis par nom
+  // (compatibilité des sauvegardes antérieures).
+  fromTableId?: string;
+  toTableId?: string;
   // Cardinalités MCD (Merise) : une de chaque côté du lien.
   // Ex : Commande(1,N) — (0,1)Client. Ancien champ `cardinality` migré auto.
   fromCard?: string;

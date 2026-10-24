@@ -1,12 +1,12 @@
 import { useEffect } from "react";
-import type { DBModel } from "../types";
+import type { DBModel, DBTable } from "../types";
 import { MCD_CARDS } from "../types";
-import { inferCardsFor } from "../domain/model";
+import { inferCardsForTable } from "../domain/model";
 
 export interface RelFormState {
-  fromTable: string;
+  fromTableId: string;
   fromField: string;
-  toTable: string;
+  toTableId: string;
   toField: string;
   cardA: string;
   cardB: string;
@@ -17,51 +17,65 @@ interface RelationFormProps {
   form: RelFormState;
   setForm: (f: RelFormState) => void;
   onAdd: () => void;
-  preset?: string;
-  suggestFrom: (src: string, dst: string) => string;
-  suggestTo: (dst: string) => string;
+  /** Table source pré-sélectionnée (édition d'une table). */
+  presetId?: string;
+  suggestFrom: (srcId: string, dstId: string) => string;
+  suggestTo: (dstId: string) => string;
+  /** Libellé qualifié quand deux instances partagent le même nom de table. */
+  tableLabel: (t: DBTable) => string;
 }
 
-export function RelationForm({ model, form, setForm, onAdd, preset, suggestFrom, suggestTo }: RelationFormProps) {
+export function RelationForm({
+  model,
+  form,
+  setForm,
+  onAdd,
+  presetId,
+  suggestFrom,
+  suggestTo,
+  tableLabel,
+}: RelationFormProps) {
   useEffect(() => {
-    if (preset && !form.fromTable) {
-      setForm({ ...form, fromTable: preset, fromField: suggestFrom(preset, form.toTable) });
+    if (presetId && !form.fromTableId) {
+      setForm({ ...form, fromTableId: presetId, fromField: suggestFrom(presetId, form.toTableId) });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [preset]);
-  const srcFields = model.tables.find((t) => t.name === form.fromTable)?.fields ?? [];
-  const dstFields = model.tables.find((t) => t.name === form.toTable)?.fields ?? [];
-  const pickSrcTable = (name: string) => {
-    const fromField = name ? suggestFrom(name, form.toTable) : "";
-    const cards = fromField ? inferCardsFor(model.tables, name, fromField) : null;
+  }, [presetId]);
+  const src = model.tables.find((t) => t.id === form.fromTableId);
+  const dst = model.tables.find((t) => t.id === form.toTableId);
+  const srcFields = src?.fields ?? [];
+  const dstFields = dst?.fields ?? [];
+  const pickSrcTable = (id: string) => {
+    const fromField = id ? suggestFrom(id, form.toTableId) : "";
+    const cards = fromField ? inferCardsForTable(model.tables.find((t) => t.id === id), fromField) : null;
     setForm({
-      ...form, fromTable: name, fromField,
+      ...form, fromTableId: id, fromField,
       ...(cards ? { cardA: cards.fromCard, cardB: cards.toCard } : null),
     });
   };
   const pickSrcField = (name: string) => {
-    const cards = name ? inferCardsFor(model.tables, form.fromTable, name) : null;
+    const cards = name ? inferCardsForTable(src, name) : null;
     setForm({
       ...form, fromField: name,
       ...(cards ? { cardA: cards.fromCard, cardB: cards.toCard } : null),
     });
   };
-  const pickDstTable = (name: string) => {
-    const toField = name ? suggestTo(name) : "";
-    const fromField = form.fromTable ? suggestFrom(form.fromTable, name) : form.fromField;
+  const pickDstTable = (id: string) => {
+    const toField = id ? suggestTo(id) : "";
+    const fromField = form.fromTableId ? suggestFrom(form.fromTableId, id) : form.fromField;
     // Re-suggère le champ source qui vise cette entité (xxx_id) + ses cartes Merise.
-    const cards = fromField ? inferCardsFor(model.tables, form.fromTable, fromField) : null;
+    const cards = fromField ? inferCardsForTable(src, fromField) : null;
     setForm({
-      ...form, toTable: name, toField, fromField,
+      ...form, toTableId: id, toField, fromField,
       ...(cards ? { cardA: cards.fromCard, cardB: cards.toCard } : null),
     });
   };
   return (
     <div className="relform">
       <label className="lbl">Entité source (porteuse du lien)</label>
-      <select value={form.fromTable} onChange={(e) => pickSrcTable(e.target.value)}>
+      <select value={form.fromTableId} onChange={(e) => pickSrcTable(e.target.value)}>
         <option value="">— choisir une entité —</option>
-        {model.tables.map((t) => <option key={t.id} value={t.name}>{t.name}</option>)}
+        {model.tables.map((t) => <option key={t.id} value={t.id}>{tableLabel(t)}</option>)}
       </select>
       <label className="lbl">Champ source</label>
       <select value={form.fromField} onChange={(e) => pickSrcField(e.target.value)}>
@@ -69,9 +83,9 @@ export function RelationForm({ model, form, setForm, onAdd, preset, suggestFrom,
         {srcFields.map((f) => <option key={f.id} value={f.name}>{f.name} · {f.type}</option>)}
       </select>
       <label className="lbl">Entité cible</label>
-      <select value={form.toTable} onChange={(e) => pickDstTable(e.target.value)}>
+      <select value={form.toTableId} onChange={(e) => pickDstTable(e.target.value)}>
         <option value="">— choisir une entité —</option>
-        {model.tables.map((t) => <option key={t.id} value={t.name}>{t.name}</option>)}
+        {model.tables.map((t) => <option key={t.id} value={t.id}>{tableLabel(t)}</option>)}
       </select>
       <label className="lbl">Champ cible</label>
       <select value={form.toField} onChange={(e) => setForm({ ...form, toField: e.target.value })}>
@@ -80,14 +94,14 @@ export function RelationForm({ model, form, setForm, onAdd, preset, suggestFrom,
       </select>
       <div className="rel-cards-edit">
         <div>
-          <label className="lbl">Côté {form.fromTable || "A"}</label>
+          <label className="lbl">Côté {src?.name || "A"}</label>
           <select value={form.cardA} onChange={(e) => setForm({ ...form, cardA: e.target.value })}>
             {MCD_CARDS.map((c) => <option key={c} value={c}>{c}</option>)}
           </select>
         </div>
         <span className="plus">+</span>
         <div>
-          <label className="lbl">Côté {form.toTable || "B"}</label>
+          <label className="lbl">Côté {dst?.name || "B"}</label>
           <select value={form.cardB} onChange={(e) => setForm({ ...form, cardB: e.target.value })}>
             {MCD_CARDS.map((c) => <option key={c} value={c}>{c}</option>)}
           </select>

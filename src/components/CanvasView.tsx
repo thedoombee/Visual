@@ -4,6 +4,8 @@ import type { DBModel, DBTable } from "../types";
 import { mcdCards } from "../types";
 import { CARD_W, cardH, fieldY, GRID_STEP, MAX_ZOOM, MIN_ZOOM } from "../domain/geometry";
 import { EDGE_STYLES, edgePathFor, type EdgeStyle } from "../domain/edges";
+import type { ModelSearchHit } from "../domain/search";
+import { relationEnds } from "../domain/relations";
 import type { Camera } from "../hooks/useCamera";
 
 interface CanvasViewProps {
@@ -18,6 +20,11 @@ interface CanvasViewProps {
   linkHoverId: string | null;
   query: string;
   hasQuery: boolean;
+  /** Modèles dont le nom (ou l'instance) correspond à la recherche. */
+  modelHits: ModelSearchHit[];
+  onFocusModel: (slotId: string) => void;
+  /** Libellé d'une table, qualifié si son nom existe dans plusieurs instances. */
+  tableLabel: (t: DBTable) => string;
   onWrapNode: (el: HTMLDivElement | null) => void;
   onWorldNode: (el: HTMLDivElement | null) => void;
   onCanvasNode: (el: HTMLDivElement | null) => void;
@@ -54,7 +61,6 @@ interface CanvasViewProps {
 
 export function CanvasView(p: CanvasViewProps) {
   const { onWrapNode, onCanvasNode, onWorldNode } = p;
-  const byName = useMemo(() => new Map(p.model.tables.map((t) => [t.name, t])), [p.model]);
   const linkFrom = p.linkFromId ? (p.model.tables.find((t) => t.id === p.linkFromId) ?? null) : null;
   const searchHits = p.hasQuery ? p.visibleTables.filter(p.matchTable) : [];
 
@@ -227,8 +233,7 @@ export function CanvasView(p: CanvasViewProps) {
           ))}
           <svg className="edges" style={{ overflow: "visible" }}>
             {p.visibleRelations.map((r) => {
-              const a = byName.get(r.fromTable);
-              const b = byName.get(r.toTable);
+              const { from: a, to: b } = relationEnds(p.model, r);
               if (!a || !b) return null;
               const x1 = a.x + CARD_W, y1 = fieldY(a, r.fromField);
               const x2 = b.x, y2 = fieldY(b, r.toField);
@@ -316,13 +321,28 @@ export function CanvasView(p: CanvasViewProps) {
         </div>
       </div>
       {p.hasQuery && (
-        <div className="toolbar" style={{ borderTop: "1px solid var(--line)", borderBottom: "none" }}>
-          <span>{searchHits.length} résultat(s) visible(s) pour « {p.query} » — double-clic pour centrer.</span>
+        <div className="toolbar search-results" style={{ borderTop: "1px solid var(--line)", borderBottom: "none" }}>
+          <span>
+            {searchHits.length} table(s) · {p.modelHits.length} modèle(s) pour « {p.query} »
+          </span>
           <span style={{ flex: 1 }} />
-          {searchHits.slice(0, 6).map((t) => (
-            <button key={t.id} className="btn small" onClick={() => p.onCenterOn(t)}>{t.name}</button>
+          {p.modelHits.slice(0, 4).map((h) => (
+            <button
+              key={h.slot.id}
+              className={`btn small ${h.visible ? "" : "masked"}`}
+              onClick={() => p.onFocusModel(h.slot.id)}
+              title={`${h.slot.name}${h.instance ? ` · ⧉ ${h.instance.name}` : ""} · ${h.tables.length} table(s)${h.tables.length ? " — cadrer le modèle" : " — pas encore sur le canvas"}`}
+            >
+              ▤ {h.slot.name}{h.instance ? ` · ${h.instance.name}` : ""}
+              {h.tables.length === 0 ? " · hors canvas" : ""}
+            </button>
           ))}
-          <button className="btn small danger" onClick={p.onClearQuery}>✕</button>
+          {searchHits.slice(0, 6).map((t) => (
+            <button key={t.id} className="btn small" onClick={() => p.onCenterOn(t)} title="Centrer cette table">
+              {p.tableLabel(t)}
+            </button>
+          ))}
+          <button className="btn small danger" onClick={p.onClearQuery} title="Effacer la recherche">✕</button>
         </div>
       )}
     </main>

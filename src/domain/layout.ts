@@ -36,10 +36,12 @@ const GAP_Y = 340;
 const CLUSTER_GAP_Y = 300;
 
 /** Degré d'une table (nb de liens) : les hubs d'abord, plus lisible. */
-function degreeOf(model: DBModel, name: string): number {
+function degreeOf(model: DBModel, table: { id: string; name: string }): number {
   let d = 0;
   for (const r of model.relations) {
-    if (r.fromTable === name || r.toTable === name) d++;
+    const from = r.fromTableId ? r.fromTableId === table.id : r.fromTable === table.name;
+    const to = r.toTableId ? r.toTableId === table.id : r.toTable === table.name;
+    if (from || to) d++;
   }
   return d;
 }
@@ -80,7 +82,7 @@ export function smartLayoutModel(model: DBModel, ctx: LayoutCtx): DBModel {
     const na = sa?.name ?? "";
     const nb = sb?.name ?? "";
     if (na !== nb) return na.localeCompare(nb, "fr");
-    return degreeOf(model, b.name) - degreeOf(model, a.name);
+    return degreeOf(model, b) - degreeOf(model, a);
   });
   for (const t of sorted) {
     const k = groupKeyOf(t.slotId);
@@ -99,7 +101,7 @@ export function smartLayoutModel(model: DBModel, ctx: LayoutCtx): DBModel {
     const g = groups.get(k)!;
     const cols = Math.max(1, Math.ceil(Math.sqrt(g.tables.length)));
     // Tables triées par degré pour mettre les hubs en haut à gauche.
-    g.tables.sort((a, b) => degreeOf(model, b.name) - degreeOf(model, a.name));
+    g.tables.sort((a, b) => degreeOf(model, b) - degreeOf(model, a));
     const sub = gridArrange(g.tables, cols, 80, oy);
     for (const [id, p] of sub) pos.set(id, p);
     const rows = Math.ceil(g.tables.length / cols);
@@ -123,7 +125,7 @@ export function layoutInstanceOnly(
   const slotIds = new Set(slots.filter((s) => s.instanceId === instanceId).map((s) => s.id));
   const mine = model.tables.filter((t) => t.slotId && slotIds.has(t.slotId));
   if (!mine.length) return { model, ids: [] };
-  mine.sort((a, b) => degreeOf(model, b.name) - degreeOf(model, a.name));
+  mine.sort((a, b) => degreeOf(model, b) - degreeOf(model, a));
   const cols = Math.max(1, Math.ceil(Math.sqrt(mine.length)));
   const pos = gridArrange(mine, cols, 60, 60);
   void uid;

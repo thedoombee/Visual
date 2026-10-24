@@ -42,7 +42,7 @@ export function CommandBar(p: CommandBarProps) {
           : <span className="cmd-diag ok">✓</span>}
       </div>
       <input
-        className="cmd-search" placeholder="Rechercher table / champ…"
+        className="cmd-search" placeholder="Rechercher table, champ, modèle…"
         value={p.query} onChange={(e) => p.onQuery(e.target.value)}
       />
       <div className="cmd-group" id="tour-export" title="Exporter : choisis le format dans le menu">

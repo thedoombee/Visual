@@ -1,5 +1,6 @@
 import type { DBModel, DBRelation, DBTable, ImportSlot, Instance } from "../types";
 import { uid } from "../types";
+import { relationEnds } from "./relations";
 
 // ---------- pur, React-free, testable ----------
 // Les instances regroupent des slots (modèles). Tout passe par ces fonctions
@@ -99,34 +100,39 @@ export function crossInstanceRelations(
   slots: ImportSlot[],
   instances: Instance[]
 ): Array<{ relation: DBRelation; fromInstance: Instance; toInstance: Instance }> {
-  const instOfTable = (name: string): Instance | undefined => {
-    const t = model.tables.find((x) => x.name === name);
-    const iid = instanceOfSlot(slots, t?.slotId);
+  const instOfTable = (table: DBTable | undefined): Instance | undefined => {
+    const iid = instanceOfSlot(slots, table?.slotId);
     return iid ? instances.find((i) => i.id === iid) : undefined;
   };
   const out: Array<{ relation: DBRelation; fromInstance: Instance; toInstance: Instance }> = [];
   for (const r of model.relations) {
-    const a = instOfTable(r.fromTable);
-    const b = instOfTable(r.toTable);
+    const { from, to } = relationEnds(model, r);
+    const a = instOfTable(from);
+    const b = instOfTable(to);
     if (a && b && a.id !== b.id) out.push({ relation: r, fromInstance: a, toInstance: b });
   }
   return out;
 }
 
+/** Liens dont les deux extrémités font partie de la sélection (par identité). */
+export function relationsWithin(model: DBModel, tables: DBTable[]): DBRelation[] {
+  const ids = new Set(tables.map((t) => t.id));
+  return model.relations.filter((r) => {
+    const { from, to } = relationEnds(model, r);
+    return !!from && !!to && ids.has(from.id) && ids.has(to.id);
+  });
+}
+
 /** Sous-modèle d'un slot : ses tables + les liens internes au slot. */
 export function subModelForSlot(model: DBModel, slotId: string): DBModel {
   const tables = tablesOfSlot(model, slotId);
-  const names = new Set(tables.map((t) => t.name));
-  const relations = model.relations.filter((r) => names.has(r.fromTable) && names.has(r.toTable));
-  return { tables, relations };
+  return { tables, relations: relationsWithin(model, tables) };
 }
 
 /** Sous-modèle d'une instance : ses tables + liens internes à l'instance. */
 export function subModelForInstance(model: DBModel, slots: ImportSlot[], instanceId: string): DBModel {
   const tables = tablesOfInstance(model, slots, instanceId);
-  const names = new Set(tables.map((t) => t.name));
-  const relations = model.relations.filter((r) => names.has(r.fromTable) && names.has(r.toTable));
-  return { tables, relations };
+  return { tables, relations: relationsWithin(model, tables) };
 }
 
 /**
@@ -177,6 +183,10 @@ export function relationsTouchingInstance(
   slots: ImportSlot[],
   instanceId: string
 ): DBRelation[] {
-  const names = new Set(tablesOfInstance(model, slots, instanceId).map((t) => t.name));
-  return model.relations.filter((r) => names.has(r.fromTable) || names.has(r.toTable));
+  const tables = tablesOfInstance(model, slots, instanceId);
+  const ids = new Set(tables.map((t) => t.id));
+  return model.relations.filter((r) => {
+    const { from, to } = relationEnds(model, r);
+    return (from && ids.has(from.id)) || (to && ids.has(to.id));
+  });
 }

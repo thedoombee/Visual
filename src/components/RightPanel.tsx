@@ -1,5 +1,6 @@
 import type { DBField, DBModel, DBTable } from "../types";
 import { MCD_CARDS, mcdCards } from "../types";
+import { relationTouchesTable } from "../domain/relations";
 import { RelationForm, type RelFormState } from "./RelationForm";
 
 // Liste complète des types de champs (Postgres-first) : on choisit, on n'écrit plus.
@@ -41,14 +42,20 @@ interface RightPanelProps {
   onAddRelation: () => void;
   onDeleteRelation: (id: string) => void;
   onUpdateCards: (id: string, side: "a" | "b", value: string) => void;
-  onSuggestFrom: (src: string, dst: string) => string;
-  onSuggestTo: (dst: string) => string;
+  onSuggestFrom: (srcId: string, dstId: string) => string;
+  onSuggestTo: (dstId: string) => string;
+  tableLabel: (t: DBTable) => string;
   onHide: () => void;
   onDeselect: () => void;
 }
 
 export function RightPanel(p: RightPanelProps) {
   const { selected } = p;
+  const labelOf = (id: string | undefined, name: string): string => {
+    const t = (id ? p.model.tables.find((x) => x.id === id) : undefined) ??
+      p.model.tables.find((x) => x.name === name);
+    return t ? p.tableLabel(t) : name;
+  };
   return (
     <aside className="panel right">
       {!selected ? (
@@ -64,7 +71,7 @@ export function RightPanel(p: RightPanelProps) {
               const { a, b } = mcdCards(r);
               return (
                 <div key={r.id} className="rel mcd">
-                  <span className="rel-link">{r.fromTable}.{r.fromField} <b>→</b> {r.toTable}.{r.toField}</span>
+                  <span className="rel-link">{labelOf(r.fromTableId, r.fromTable)}.{r.fromField} <b>→</b> {labelOf(r.toTableId, r.toTable)}.{r.toField}</span>
                   <span className="rel-cards">
                     <select value={a} onChange={(e) => p.onUpdateCards(r.id, "a", e.target.value)} title={`Cardinalité côté ${r.fromTable}`}>
                       {MCD_CARDS.map((c) => <option key={c} value={c}>{c}</option>)}
@@ -84,11 +91,12 @@ export function RightPanel(p: RightPanelProps) {
           <RelationForm
             model={p.model} form={p.relForm} setForm={p.onRelForm} onAdd={p.onAddRelation}
             suggestFrom={p.onSuggestFrom} suggestTo={p.onSuggestTo}
+            tableLabel={p.tableLabel}
           />
         </>
       ) : (
         <>
-          <div className="panel-title"><span>» {selected.name}</span>
+          <div className="panel-title"><span>» {p.tableLabel(selected)}</span>
             <span style={{ display: "flex", gap: 4 }}>
               <button className="icon-btn" onClick={p.onDeselect}>✕</button>
               <button className="icon-btn" onClick={p.onHide}>⟩</button>
@@ -130,11 +138,11 @@ export function RightPanel(p: RightPanelProps) {
           </div>
           <h4>Relations de cette table</h4>
           <div className="rellist">
-            {p.model.relations.filter((r) => r.fromTable === selected.name || r.toTable === selected.name).map((r) => {
+            {p.model.relations.filter((r) => relationTouchesTable(r, selected)).map((r) => {
               const { a, b } = mcdCards(r);
               return (
                 <div key={r.id} className="rel mcd">
-                  <span className="rel-link">{r.fromTable}.{r.fromField} <b>→</b> {r.toTable}.{r.toField}</span>
+                  <span className="rel-link">{labelOf(r.fromTableId, r.fromTable)}.{r.fromField} <b>→</b> {labelOf(r.toTableId, r.toTable)}.{r.toField}</span>
                   <span className="rel-cards">
                     <select value={a} onChange={(e) => p.onUpdateCards(r.id, "a", e.target.value)} title={`Cardinalité côté ${r.fromTable}`}>
                       {MCD_CARDS.map((c) => <option key={c} value={c}>{c}</option>)}
@@ -152,7 +160,8 @@ export function RightPanel(p: RightPanelProps) {
           <h4>Relier à une autre entité +</h4>
           <RelationForm
             model={p.model} form={p.relForm} setForm={p.onRelForm} onAdd={p.onAddRelation}
-            preset={selected.name} suggestFrom={p.onSuggestFrom} suggestTo={p.onSuggestTo}
+            presetId={selected.id} suggestFrom={p.onSuggestFrom} suggestTo={p.onSuggestTo}
+            tableLabel={p.tableLabel}
           />
         </>
       )}
