@@ -81,8 +81,7 @@ export function instanceOfSlot(slots: ImportSlot[], slotId?: string): string | u
   return slots.find((s) => s.id === slotId)?.instanceId;
 }
 
-/** Communication autorisée entre deux tables : refusée seulement quand chacune
- *  appartient à une instance DIFFÉRENTE. */
+/** Communication interdite entre instances : deux projets ne communiquent JAMAIS. */
 export function tablesCanCommunicate(
   slots: ImportSlot[],
   a: Pick<DBTable, "slotId">,
@@ -90,7 +89,12 @@ export function tablesCanCommunicate(
 ): boolean {
   const ia = instanceOfSlot(slots, a.slotId);
   const ib = instanceOfSlot(slots, b.slotId);
-  return !ia || !ib || ia === ib;
+  // Si les deux ont un instanceId et que c'est différent => bloqué
+  if (ia && ib && ia !== ib) return false;
+  // Si un seul a un instanceId (l'autre est manuel/sans instance) => tout de même bloqué
+  // pour garder l'étanchéité totale entre instances
+  if (ia !== ib) return false;
+  return true;
 }
 
 /** Liens existants qui traversent deux instances différentes (état hérité d'un
