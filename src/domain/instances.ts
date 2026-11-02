@@ -87,14 +87,24 @@ export function tablesCanCommunicate(
   a: Pick<DBTable, "slotId">,
   b: Pick<DBTable, "slotId">
 ): boolean {
-  const ia = instanceOfSlot(slots, a.slotId);
-  const ib = instanceOfSlot(slots, b.slotId);
-  // Si les deux ont un instanceId et que c'est différent => bloqué
-  if (ia && ib && ia !== ib) return false;
-  // Si un seul a un instanceId (l'autre est manuel/sans instance) => tout de même bloqué
-  // pour garder l'étanchéité totale entre instances
-  if (ia !== ib) return false;
-  return true;
+  // Helper : obtient l'instance d'un slot (undefined si manuel / inconnu)
+  const getInst = (slotId?: string) => slotId ? instanceOfSlot(slots, slotId) : undefined;
+
+  const instA = getInst(a.slotId);
+  const instB = getInst(b.slotId);
+
+  // Cas 1 : les deux tables sont manuelles (pas de slotId) => communication autorisée
+  if (!a.slotId && !b.slotId) return true;
+
+  // Cas 2 : les deux tables appartiennent au même instance => communication autorisée
+  // Peu importe qu'elles aient des slotId différents, tant qu'elles sont dans la même instance
+  if (instA && instB && instA === instB) return true;
+
+  // Cas 3 : same slotId ET même instance => communication autorisée (cas particulier)
+  if (a.slotId && a.slotId === b.slotId && instA && instB && instA === instB) return true;
+
+  // Cas 4 : slotIds différents et instances différentes ou manquantes => bloqué
+  return false;
 }
 
 /** Liens existants qui traversent deux instances différentes (état hérité d'un
