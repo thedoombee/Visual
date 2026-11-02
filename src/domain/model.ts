@@ -1,4 +1,4 @@
-import type { DBField, DBModel, DBRelation, DBTable, ImportSlot } from "../types";
+import type { DBField, DBModel, DBRelation, DBTable, ImportSlot, Instance } from "../types";
 import { uid } from "../types";
 import { CARD_W, cardH } from "./geometry";
 import {
@@ -7,6 +7,7 @@ import {
   freeTableNameInSlot,
   namesCanShareAcrossInstances,
 } from "./naming";
+import { tablesCanCommunicate, crossInstanceRelations } from "./instances";
 import {
   normalizeRelationIds,
   relationEnds,
@@ -376,9 +377,24 @@ export function isDuplicateRelation(
 }
 
 /** Ajoute le lien (IDs d'extrémités remplis) et marque le champ source FK. */
-export function addRelationTo(model: DBModel, rel: DBRelation): DBModel {
+export function addRelationTo(
+  model: DBModel,
+  rel: DBRelation,
+  slots: ImportSlot[]
+): DBModel {
   const src = resolveTable(model, rel.fromTable, rel.fromTableId);
   const dst = resolveTable(model, rel.toTable, rel.toTableId);
+  // Interdiction de lier des tables d'instances différentes
+  // Utilise tablesCanCommunicate pour une vérification complète (inclut cas manuel)
+  const canComm = tablesCanCommunicate(
+    slots,
+    { slotId: src?.slotId ?? rel.fromTableId ? model.tables.find((t) => t.name === rel.fromTable)?.slotId : undefined },
+    { slotId: dst?.slotId ?? rel.toTableId ? model.tables.find((t) => t.name === rel.toTable)?.slotId : undefined }
+  );
+  if (!canComm) {
+    // Bloquer le lien : instances différentes ou incompatibles
+    return model;
+  }
   const linked: DBRelation = {
     ...rel,
     fromTable: src?.name ?? rel.fromTable,
@@ -404,6 +420,21 @@ export function addRelationTo(model: DBModel, rel: DBRelation): DBModel {
 
 export function removeRelation(model: DBModel, id: string): DBModel {
   return { ...model, relations: model.relations.filter((r) => r.id !== id) };
+}
+
+/** Retire toutes les relations qui traversent deux instances différentes. */
+export function removeCrossInstanceRelations(model: DBModel, slots: ImportSlot[], instances: Instance[]): DBModel {
+  const cross = crossInstanceRelations(model, slots, instances);
+  if (!cross.length) return model;
+  const crossKeys = cross.map((c) => `${c.relation.fromTableId ?? c.relation.fromTable}.${c.relation.fromField}→${c.relation.toTableId ?? c.relation.toTable}`);
+  const newRelations = model.relations.filter((r) => {
+    const relationKeyStr = `${r.fromTableId ?? r.fromTable}.${r.fromField}→${r.toTableId ?? r.toTable}`;
+    return !crossKeys.includes(relationKeyStr);
+  });
+  return {
+    ...model,
+    relations: newRelations,
+  };
 }
 
 export function updateRelationCards(

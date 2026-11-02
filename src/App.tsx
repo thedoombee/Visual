@@ -20,6 +20,7 @@ import {
   moveTableIn,
   moveTablesBy,
   removeRelation,
+  removeCrossInstanceRelations,
   reconcileSlotTableNames,
   removeSlotTables,
   removeTable,
@@ -450,6 +451,15 @@ export default function App() {
     const id = setTimeout(() => saveCamera(camera.cam), 400);
     return () => clearTimeout(id);
   }, [camera.cam, isSharedView]);
+  // Nettoyage automatique des liens cross-instance : si des tables de projets
+  // différents sont liées, on retire le lien pour garder l'étanchéité.
+  useEffect(() => {
+    const cleaned = removeCrossInstanceRelations(model, slots, instances);
+    if (cleaned !== model) {
+      applyWorkspace((w) => ({ ...w, model: cleaned }));
+      setParseMsg("Liens inter-projets détectés et retirés pour maintenir l'indépendance des instances.");
+    }
+  }, [model, slots, instances]);
   // Flush synchrone à la fermeture : un refresh dans les 400 ms du debounce
   // ne perd plus ni le dernier déplacement ni la dernière vue.
   const modelRef = useRef(model);
@@ -648,9 +658,9 @@ export default function App() {
       toTable: dst.name, toTableId: dst.id, toField,
       fromCard: cardA, toCard: cardB,
     };
-    apply((m) => addRelationTo(m, rel));
+    apply((m) => addRelationTo(m, rel, slots));
     setRelForm((f) => ({ ...f, fromField: "", toField: "" }));
-  }, [relForm, apply, model, byId, communicationError]);
+  }, [relForm, apply, model, byId, communicationError, slots]);
 
   const deleteRelation = useCallback((id: string) => {
     apply((m) => removeRelation(m, id));
@@ -702,11 +712,11 @@ export default function App() {
       setLinkFromId(null);
       return;
     }
-    apply((m) => addRelationTo(m, rel));
+    apply((m) => addRelationTo(m, rel, slots));
     setParseMsg(`Lié : ${src.name}.${fromField} (${rel.fromCard}) — ${t.name}.${toField} (${rel.toCard}). Modifie les cardinalités dans Édition.`);
     setSelectedId(src.id);
     setLinkFromId(null); // le mode reste actif pour enchaîner
-  }, [linkFromId, model, apply, communicationError]);
+  }, [linkFromId, model, apply, communicationError, slots]);
 
   // ---------- galerie : un modèle choisi S'AJOUTE aux autres (jamais de remplacement) ----------
   // Il rejoint le canvas (à droite) + un slot du panneau gauche, en UN seul
